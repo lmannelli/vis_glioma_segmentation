@@ -476,13 +476,12 @@ def main(cfg: DictConfig):
         name=cfg.training.exp_name,
         id=prev_run_id,
         resume="allow",
-        config=cfg
+        config=wandb_config,             
     )
     # Si es nuevo, guardo id
     if prev_run_id is None:
         with open(run_id_path, "w") as f:
             f.write(wandb_run.id)
-    wandb.watch(model, log="all", log_freq=cfg.training.val_every)
     # Initialize random
     init_random(seed=cfg.training.seed)
 
@@ -658,7 +657,7 @@ def main(cfg: DictConfig):
                                             batch_size=batch_size, 
                                             shuffle=False, num_workers=num_workers, 
                                             pin_memory=True)
-    
+    wandb.watch(model, log="all", log_freq=cfg.training.val_every)
     # Training
     run(cfg, model=model,
         loss_func= loss_func,
