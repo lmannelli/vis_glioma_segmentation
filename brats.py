@@ -30,7 +30,13 @@ class BraTS(Dataset):
 
         for patient_id in patient_ids:
             if version == "brats2023":
-                paths = [f"{patient_id}{patten}.nii.gz" for patten in self.pattens]
+                image_patterns = ["-t1n","-t1c","-t2w","-t2f"]
+                image_paths = [f"{patient_id}{pat}.nii.gz" for pat in image_patterns]
+                if mode in ["train", "val", "test", "visualize"]:
+                    seg_path = f"{patient_id}.nii.gz"
+                else:
+                    seg_path = None
+                paths = image_paths + [seg_path]
             elif version == "brats2019" or version == "brats2020":
                 paths = [f"{patient_id}{patten}.nii" for patten in self.pattens]
             patient = dict(
