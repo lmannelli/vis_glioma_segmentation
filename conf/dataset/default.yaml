@@ -1,4 +1,4 @@
-dataset_folder: "/home/psalmon/dataset_brats2024_split"
+dataset_folder: "/home/psalmon/dataset_brats2024_split/"
 version: brats2024
 type: brats
 patient_id: false
