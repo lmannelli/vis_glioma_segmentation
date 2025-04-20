@@ -16,7 +16,9 @@ tqdm>=4.47.0
 pylint!=2.13  # https://github.com/PyCQA/pylint/issues/5969
 torchvision
 psutil
-
+torchsummary
+timm==1.0.15
+batchgenerators==0.25
 pandas
 einops
 matplotlib!=3.5.0
