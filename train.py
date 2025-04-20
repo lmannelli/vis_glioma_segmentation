@@ -13,7 +13,7 @@ import psutil
 from utils.meter import AverageMeter
 from utils.general import save_checkpoint, load_pretrained_model, resume_training
 from brats import get_datasets
-
+from omegaconf import OmegaConf, DictConfig
 from monai.data import  decollate_batch
 import torch
 import torch.nn as nn
@@ -456,6 +456,8 @@ def run(cfg, model,
 
 @hydra.main(config_name='configs', config_path= 'conf', version_base=None)
 def main(cfg: DictConfig):
+
+    wandb_config = OmegaConf.to_container(cfg, resolve=True)
      # 1. Crear carpeta de experimentos
     create_dirs(cfg.training.exp_name)
     
