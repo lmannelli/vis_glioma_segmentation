@@ -47,12 +47,12 @@ class BraTS(Dataset):
         for patient_id in patient_ids:
             # Create file paths for each modality
             image_paths = {
-                modality: f"{patient_id}{suffix}.nii.gz" if version == "brats2023" else f"{patient_id}{suffix}.nii"
+                modality: f"{patient_id}{suffix}.nii.gz" if version == "brats2023" else f"{patient_id}{suffix}.nii.gz"
                 for modality, suffix in modality_suffixes.items()
             }
 
             if mode in ["train", "val", "test", "visualize"]:
-                seg_filename = f"{patient_id}.nii.gz" if version == "brats2023" else f"{patient_id}_seg.nii"
+                seg_filename = f"{patient_id}.nii.gz" if version == "brats2023" else f"{patient_id}_seg.nii.gz"
             else:
                 seg_filename = None
 
