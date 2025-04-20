@@ -64,13 +64,15 @@ class BraTS(Dataset):
         crop_list = []
         pad_list = []
 
-        # Load images for all modalities
+        # Cargar imágenes para todas las modalidades desde la subcarpeta del paciente
         patient_image = {
-            modality: torch.tensor(load_nii(os.path.join(self.patients_dir, "images", patient[modality])))
+            modality: torch.tensor(
+                load_nii(os.path.join(self.patients_dir, "images", patient["id"], patient[modality]))
+            )
             for modality in self.modalities
         }
 
-        # Load segmentation if available
+        # Cargar segmentación si está disponible
         if self.mode in ["train", "val", "test", "visualize"]:
             patient_label = torch.tensor(
                 load_nii(os.path.join(self.patients_dir, "masks", patient["seg"])).astype("int8")
@@ -78,10 +80,10 @@ class BraTS(Dataset):
         else:
             patient_label = torch.zeros_like(next(iter(patient_image.values())), dtype=torch.int8)
 
-        # Stack channels into single tensor
+        # Normalizar intensidades y apilar canales
         patient_image = torch.stack([minmax(patient_image[mod]) for mod in self.modalities])
 
-        # Crop black borders
+        # Recortar bordes negros
         nonzero_index = torch.nonzero(torch.sum(patient_image, dim=0) != 0)
         z_indexes, y_indexes, x_indexes = nonzero_index[:, 0], nonzero_index[:, 1], nonzero_index[:, 2]
         zmin, ymin, xmin = [max(0, int(torch.min(idxs) - 1)) for idxs in (z_indexes, y_indexes, x_indexes)]
@@ -90,7 +92,7 @@ class BraTS(Dataset):
         patient_image = patient_image[:, zmin:zmax, ymin:ymax, xmin:xmax].float()
         patient_label = patient_label[zmin:zmax, ymin:ymax, xmin:xmax]
 
-        # One-hot style conversion to 3 channels: ET, TC, WT
+        # Convertir máscara a 3 canales: ET, TC, WT
         if self.mode in ["train", "val", "test"]:
             ed_label = 2
             ncr_label = 1
@@ -100,7 +102,7 @@ class BraTS(Dataset):
             wt = torch.logical_or(tc, patient_label == ed_label)
             patient_label = torch.stack([et, tc, wt])
 
-        # Apply padding/cropping
+        # Aplicar padding/cropping
         if self.mode in ["train", "val", "test"]:
             patient_image, patient_label, pad_list, crop_list = pad_or_crop_image(
                 patient_image, patient_label, target_size=self.target_size
@@ -122,6 +124,7 @@ class BraTS(Dataset):
             "box_slice": crop_list,
             "pad_list": pad_list
         }
+
 
     def __len__(self):
         return len(self.datas)
