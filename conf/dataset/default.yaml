@@ -1,9 +1,5 @@
-irl_pc: false
-laptop_pc: false
-colab: false
-sines_pc: false
 dataset_folder: "/home/psalmon/dataset_brats2024_split"
-version:  brats2024
-type: brats # brats 
+version: brats2024
+type: brats
 patient_id: false
 save_dir: /home/psalmon/Visionary_Glioma/vis_glioma_segmentation
