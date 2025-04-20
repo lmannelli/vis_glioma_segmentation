@@ -13,9 +13,11 @@ def get_brats_folder(dataset_folder, mode, version="brats2023"):
     # assert mode in ["train","val", "test"]
     assert mode in ["train","val"]
     if mode == "train":
-        return os.path.join(dataset_folder, version, "train")
+        # return os.path.join(dataset_folder, version, "train")
+        return os.path.join(dataset_folder, "train")
     elif mode == "val":
-        return os.path.join(dataset_folder, version, "val")
+        # return os.path.join(dataset_folder, version, "train")
+        return os.path.join(dataset_folder, "val")
     # elif mode == "test" :
     #     return os.path.join(dataset_folder, version, "test")
 
