@@ -634,17 +634,7 @@ def main(cfg: DictConfig):
     # Batch and workers
     batch_size = cfg.training.batch_size
     num_workers = cfg.training.num_workers
-    
-    # Set path to dataset (Customize to your case in configs)
-    if cfg.training.colab:
-        dataset_dir = cfg.dataset.colab
-    elif cfg.training.irl:
-        dataset_dir = cfg.dataset.irl_pc
-    elif cfg.training.sines:
-        dataset_dir = cfg.dataset.sines_pc
-    elif cfg.training.my_pc:
-        dataset_dir = cfg.dataset.laptop_pc
-
+    dataset_dir = cfg.dataset.dataset_folder
 
     train_dataset = get_datasets(dataset_dir, "train", target_size=(128, 128, 128))
     train_val_dataset = get_datasets(dataset_dir, "val", target_size=(128, 128, 128))
