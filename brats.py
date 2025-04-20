@@ -52,7 +52,7 @@ class BraTS(Dataset):
             }
 
             if mode in ["train", "val", "test", "visualize"]:
-                seg_filename = f"{patient_id}.nii.gz" if version == "brats2023" else f"{patient_id}_seg.nii.gz"
+                seg_filename = f"{patient_id}.nii.gz" if version == "brats2023" else f"{patient_id}-seg.nii.gz"
             else:
                 seg_filename = None
 
