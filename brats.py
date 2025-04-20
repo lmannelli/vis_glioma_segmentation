@@ -44,8 +44,8 @@ class BraTS(Dataset):
         patient_id = patient["id"]
         crop_list = []
         pad_list = []
-        patient_image = {key:torch.tensor(load_nii(f"{self.patients_dir}/{patient_id}/{patient[key]}")) for key in patient if key not in ["id", "seg"]}
-        patient_label = torch.tensor(load_nii(f"{self.patients_dir}/{patient_id}/{patient['seg']}").astype("int8"))
+        patient_image = {key: torch.tensor(load_nii(os.path.join(self.patients_dir, "images", patient[key]))) for key in patient if key not in ["id", "seg"]}
+        patient_label = torch.tensor(load_nii(os.path.join(self.patients_dir, "masks", patient['seg'])).astype("int8"))
         patient_image = torch.stack([patient_image[key] for key in patient_image])  
         if self.mode == "train" or self.mode == "val" or self.mode == "test":
             ed_label = 2 # Peritumoral Edema 
