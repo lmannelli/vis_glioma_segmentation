@@ -8,6 +8,8 @@ import time
 import gc
 import nibabel as nib
 import tqdm as tqdm
+import wandb
+import psutil
 from utils.meter import AverageMeter
 from utils.general import save_checkpoint, load_pretrained_model, resume_training
 from brats import get_datasets
@@ -275,6 +277,14 @@ def trainer(cfg,
             "time {:.2f} m,".format((time.time() - epoch_time)/60),
             end=""
         )
+        # Log training metrics
+        log_data = {
+            "train/loss": training_loss,
+            "lr": optimizer.param_groups[0]['lr'],
+            "epoch": epoch,
+            "system/gpu_mem": torch.cuda.max_memory_allocated() / 1e9,
+            "system/cpu_usage": psutil.cpu_percent()
+        }
 
         if epoch % val_every == 0 or epoch == 0:
             epoch_losses.append(training_loss)
@@ -301,11 +311,27 @@ def trainer(cfg,
             dices_et.append(dice_et)
             dices_wt.append(dices_wt)
             mean_dices.append(val_mean_acc)
+            # Actualiza log_data con métricas de validación
+            log_data.update({
+                "val/dice_tc": dice_tc,
+                "val/dice_wt": dice_wt,
+                "val/dice_et": dice_et,
+                "val/mean_dice": val_mean_acc
+            })
+        
+    
+
             if val_mean_acc > val_acc_max:
                 val_acc_max = val_mean_acc
                 save_best_model(cfg.training.exp_name, model, "best-model")
+                # Guarda el mejor modelo en W&B
+                torch.save(model.state_dict(), "best_model.pth")
+                wandb.save("best_model.pth")
             scheduler.step()
             save_checkpoint(cfg.training.exp_name, dict(epoch=epoch + 1, max_epochs=max_epochs, model = model.state_dict(), optimizer=optimizer.state_dict(), scheduler=scheduler.state_dict()), "checkpoint")
+
+        # Envía todos los datos a W&B
+        wandb.log(log_data)
     print()
     print("Training Finished!, Best Accuracy: ", val_acc_max)
 
@@ -317,7 +343,14 @@ def trainer(cfg,
               val_mean_acc=mean_dices,
               epochs=train_epochs, 
               cfg = cfg)
-    
+    wandb.log({
+        "Dice_TC_curve": wandb.plot.line_series(
+            xs=train_epochs, ys=[dices_tc], keys=["TC"], title="Dice TC", xname="Epoch"),
+        "Dice_WT_curve": wandb.plot.line_series(
+            xs=train_epochs, ys=[dices_wt], keys=["WT"], title="Dice WT", xname="Epoch"),
+        "Dice_ET_curve": wandb.plot.line_series(
+            xs=train_epochs, ys=[dices_et], keys=["ET"], title="Dice ET", xname="Epoch"),
+    })
     return (
         val_acc_max,
         dices_tc,
@@ -423,7 +456,31 @@ def run(cfg, model,
 
 @hydra.main(config_name='configs', config_path= 'conf', version_base=None)
 def main(cfg: DictConfig):
+     # 1. Crear carpeta de experimentos
+    create_dirs(cfg.training.exp_name)
+    
+    # 2. Leer run_id anterior (si existe)
+    run_id_path = os.path.join(cfg.training.exp_name, "wandb_run_id.txt")
+    if os.path.isfile(run_id_path):
+        with open(run_id_path) as f:
+            prev_run_id = f.read().strip()
+    else:
+        prev_run_id = None
 
+    # 3. Login y init/reanudar W&B
+    wandb.login(key=cfg.training.wand_api_key)
+    wandb_run = wandb.init(
+        project=cfg.training.project_name,
+        name=cfg.training.exp_name,
+        id=prev_run_id,
+        resume="allow",
+        config=cfg
+    )
+    # Si es nuevo, guardo id
+    if prev_run_id is None:
+        with open(run_id_path, "w") as f:
+            f.write(wandb_run.id)
+    wandb.watch(model, log="all", log_freq=cfg.training.val_every)
     # Initialize random
     init_random(seed=cfg.training.seed)
 
@@ -599,6 +656,7 @@ def main(cfg: DictConfig):
                                             batch_size=batch_size, 
                                             shuffle=False, num_workers=num_workers, 
                                             pin_memory=True)
+    
     # Training
     run(cfg, model=model,
         loss_func= loss_func,
