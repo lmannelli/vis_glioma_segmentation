@@ -10,7 +10,6 @@ solver_name: Adam
 loss_type: dice
 pretrained: False
 resume: False
-exp_name: segres_net_runs
 seed: 123
 colab: False
 irl: True
