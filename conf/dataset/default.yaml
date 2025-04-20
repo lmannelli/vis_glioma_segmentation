@@ -1,9 +1,9 @@
-irl_pc: /media/faizan/2418a65c-11bc-4f64-bf23-ecd60d93cf53/faizan/Faizan_thesis/dataset
-laptop_pc: "E:/Brats23 Data/Dataset/BraTS23_mapped/dataset"
-colab: "/gdrive/MyDrive/BraTS2023/"
-sines_pc: /drive/faizanai.rrl/datasets
+irl_pc: false
+laptop_pc: false
+colab: false
+sines_pc: false
 dataset_folder: "/home/psalmon/dataset_brats2024_split"
 version:  brats2024
 type: brats # brats 
-patient_id: "E:/Brats23 Data/Dataset/BraTS23_mapped/dataset/brats2023"
-save_dir: paper_figs/exp1/modalities
+patient_id: false
+save_dir: /home/psalmon/Visionary_Glioma/vis_glioma_segmentation
