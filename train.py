@@ -189,7 +189,7 @@ def val(model, loader, acc_func, model_inferer = None,
        include_background=False,
        percentile=95,
        reduction=MetricReduction.MEAN_BATCH,
-       get_not_nans=True,
+       get_not_nans=False,
    )
     with torch.no_grad():
         for batch_data in loader:
@@ -324,7 +324,7 @@ def trainer(cfg,
             dice_wt = val_acc[1]
             dice_et = val_acc[2]
             val_mean_acc = np.mean(val_acc)
-            val_mean_hd95 = np.mean([hd95_vals[0].item(), hd95_vals[1].item(), hd95_vals[2].item()])
+            val_mean_hd95 = float(torch.nanmean(hd95_vals))
 
 
             print(
@@ -340,7 +340,7 @@ def trainer(cfg,
                 )
             
             dices_tc.append(dice_tc)
-            dices_wt.append(dices_wt)
+            dices_wt.append(dice_wt)
             dices_et.append(dice_et)
             dices_mean.append(val_mean_acc)
 
