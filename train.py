@@ -19,7 +19,7 @@ import torch
 import torch.nn as nn
 from torch.backends import cudnn
 
-from monai.metrics import DiceMetric
+from monai.metrics import DiceMetric, HausdorffDistanceMetric
 from monai.utils.enums import MetricReduction
 from networks.models.ResUNetpp.model import ResUnetPlusPlus
 from monai.losses import DiceLoss, DiceCELoss
@@ -159,6 +159,7 @@ def train_epoch(model, loader, optimizer, loss_func, augment = True):
         optimizer.step()
         optimizer.zero_grad()
         run_loss.update(loss.item(), n = batch_data["image"].shape[0])
+        wandb.log({"train/loss_batch": loss.item()})
     torch.cuda.empty_cache()
     return run_loss.avg
 
@@ -184,6 +185,12 @@ def val(model, loader, acc_func, model_inferer = None,
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.eval()
     run_acc = AverageMeter()
+    hd_metric = HausdorffDistanceMetric(
+       include_background=False,
+       percentile=95,
+       reduction=MetricReduction.MEAN_BATCH,
+       get_not_nans=True,
+   )
     with torch.no_grad():
         for batch_data in loader:
             logits = model_inferer(batch_data["image"].to(device))
@@ -194,12 +201,18 @@ def val(model, loader, acc_func, model_inferer = None,
             acc_func(y_pred = predictions, y = masks)
             acc, not_nans = acc_func.aggregate()
             run_acc.update(acc.cpu().numpy(), n = not_nans.cpu().numpy())
-    return run_acc.avg
+            hd_metric(y_pred=predictions, y=masks)
+    hd95_vals, _ = hd_metric.aggregate() # hd95_vals es un tensor [hd95_tc, hd95_wt, hd95_et]    
+    return run_acc.avg, hd95_vals
 
 # Save trained results
 def save_data(training_loss,
               et, wt, tc,
               val_mean_acc,
+              hd95_et,
+              hd95_wt,
+              hd95_tc,
+              val_mean_hd95,
               epochs, cfg):
     """
     save the training data for later use
@@ -216,13 +229,17 @@ def save_data(training_loss,
     epochs: list
     """
     data = {}
-    NAMES = ["training_loss", "WT", "ET", "TC", "mean_dice", "epochs"]
-    data_lists = [training_loss, wt, et, tc, val_mean_acc, epochs]
+    NAMES = ["training_loss", "WT", "ET", "TC", "mean_dice",
+             "hd95_WT", "hd95_ET", "hd95_TC", "mean_hd95",
+             "epochs"]
+    data_lists = [training_loss, wt, et, tc, val_mean_acc,
+                  hd95_wt, hd95_et, hd95_tc, val_mean_hd95,
+                  epochs]
     for i in range(len(NAMES)):
         data[f"{NAMES[i]}"] = data_lists[i]
     data_df = pd.DataFrame(data)
     save_path = os.path.join(cfg.training.exp_name, "csv")
-    os.makedirs(save_path, exist_ok= True)
+    os.makedirs(save_path, exist_ok=True)
     data_df.to_csv(os.path.join(save_path, "training_data.csv"))
     return data
 
@@ -261,7 +278,12 @@ def trainer(cfg,
     dices_tc = []
     dices_wt = []
     dices_et = []
-    mean_dices = []
+    dices_mean = []
+
+    hd95_tc = []
+    hd95_wt = []
+    hd95_et = []
+    hd95_mean = []
     epoch_losses = [] # training loss
     train_epochs = []
     for epoch in range(start_epoch, max_epochs):
@@ -289,8 +311,7 @@ def trainer(cfg,
         if epoch % val_every == 0 or epoch == 0:
             epoch_losses.append(training_loss)
             train_epochs.append(int(epoch))
-            val_acc =  val(model = model,
-                          loader = val_loader,
+            val_acc, hd95_vals = val(loader = val_loader,
                           acc_func = acc_func,
                           model_inferer= model_inferer,
                           post_sigmoid=post_sigmoid,
@@ -300,27 +321,41 @@ def trainer(cfg,
             dice_wt = val_acc[1]
             dice_et = val_acc[2]
             val_mean_acc = np.mean(val_acc)
+            val_mean_hd95 = np.mean([hd95_vals[0].item(), hd95_vals[1].item(), hd95_vals[2].item()])
+
+
             print(
                 " Validation: "
-                "dice_tc:", "{:.4f},".format(dice_tc),
+                " dice_tc:", "{:.4f},".format(dice_tc),
                 " dice_wt:", "{:.4f},".format(dice_wt),
                 " dice_et:", "{:.4f},".format(dice_et),
-                " mean_dice:", "{:.4f}".format(val_mean_acc))
+                " mean_dice:", "{:.4f}".format(val_mean_acc),
+                " hd95_tc:", "{:.4f},".format(hd95_vals[0].item()),
+                " dice_wt:", "{:.4f},".format(hd95_vals[1].item()),
+                " dice_et:", "{:.4f},".format(hd95_vals[2].item()),
+                " mean_dice:", "{:.4f}".format(val_mean_hd95)
+                )
             
             dices_tc.append(dice_tc)
-            dices_et.append(dice_et)
             dices_wt.append(dices_wt)
-            mean_dices.append(val_mean_acc)
+            dices_et.append(dice_et)
+            dices_mean.append(val_mean_acc)
+
+            hd95_tc.append(hd95_vals[0].item())
+            hd95_wt.append(hd95_vals[1].item())
+            hd95_et.append(hd95_vals[2].item())
+            hd95_mean.append(val_mean_hd95)
+
             # Actualiza log_data con métricas de validación
             log_data.update({
                 "val/dice_tc": dice_tc,
                 "val/dice_wt": dice_wt,
                 "val/dice_et": dice_et,
-                "val/mean_dice": val_mean_acc
+                "val/mean_dice": val_mean_acc,
+                "val/hd95_tc": hd95_vals[0].item(),
+                "val/hd95_wt": hd95_vals[1].item(),
+                "val/hd95_et": hd95_vals[2].item(),
             })
-        
-    
-
             if val_mean_acc > val_acc_max:
                 val_acc_max = val_mean_acc
                 save_best_model(cfg.training.exp_name, model, "best-model")
@@ -340,7 +375,11 @@ def trainer(cfg,
               et= dices_et,
               wt= dices_wt,
               tc=dices_tc,
-              val_mean_acc=mean_dices,
+              val_mean_acc=dices_mean,
+              hd95_et= hd95_et,
+              hd95_wt= hd95_wt,
+              hd95_tc=hd95_tc,
+              val_mean_hd95=hd95_mean,
               epochs=train_epochs, 
               cfg = cfg)
     wandb.log({
@@ -350,13 +389,19 @@ def trainer(cfg,
             xs=train_epochs, ys=[dices_wt], keys=["WT"], title="Dice WT", xname="Epoch"),
         "Dice_ET_curve": wandb.plot.line_series(
             xs=train_epochs, ys=[dices_et], keys=["ET"], title="Dice ET", xname="Epoch"),
+        "HD95_TC_curve": wandb.plot.line_series(
+            xs=train_epochs, ys=[hd95_tc], keys=["TC"], title="HD95 TC", xname="Epoch"),
+        "HD95_WT_curve": wandb.plot.line_series(
+            xs=train_epochs, ys=[hd95_wt], keys=["WT"], title="HD95 WT", xname="Epoch"),
+        "HD95_ET_curve": wandb.plot.line_series(
+            xs=train_epochs, ys=[hd95_et], keys=["ET"], title="HD95 ET", xname="Epoch"),
     })
     return (
         val_acc_max,
         dices_tc,
         dices_wt,
         dices_et,
-        mean_dices,
+        dices_mean,
         training_loss,
         train_epochs)
 
