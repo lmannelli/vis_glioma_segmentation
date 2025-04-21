@@ -311,12 +311,15 @@ def trainer(cfg,
         if epoch % val_every == 0 or epoch == 0:
             epoch_losses.append(training_loss)
             train_epochs.append(int(epoch))
-            val_acc, hd95_vals = val(loader = val_loader,
-                          acc_func = acc_func,
-                          model_inferer= model_inferer,
-                          post_sigmoid=post_sigmoid,
-                          post_pred=post_pred, 
-                          post_label = post_label)
+            val_acc, hd95_vals = val(
+                model=model,  # Parámetro añadido
+                loader=val_loader,
+                acc_func=acc_func,
+                model_inferer=model_inferer,
+                post_sigmoid=post_sigmoid,
+                post_pred=post_pred, 
+                post_label=post_label
+            )
             dice_tc = val_acc[0]
             dice_wt = val_acc[1]
             dice_et = val_acc[2]
