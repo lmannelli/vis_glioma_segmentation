@@ -186,7 +186,7 @@ def val(model, loader, acc_func, model_inferer = None,
     model.eval()
     run_acc = AverageMeter()
     hd_metric = HausdorffDistanceMetric(
-       include_background=False,
+       include_background=True,
        percentile=95,
        reduction=MetricReduction.MEAN_BATCH,
        get_not_nans=False,
