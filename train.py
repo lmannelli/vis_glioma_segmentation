@@ -263,26 +263,26 @@ def save_data(training_loss,
     data_df.to_csv(os.path.join(save_path, "training_data.csv"))
     return data
 
-def trainer(cfg,
-            model,
-            train_loader,
-            val_loader,
-            optimizer,
-            loss_func,
-            acc_func,
-            scheduler,
-            iferer,
-            augmenter,
-            scaler,
-            device,
-            optimize,
-            max_epochs = 100,
-            model_inferer = None,
-            start_epoch = 0,
-            post_sigmoid = None,
-            post_pred = None,
-            post_label = None,
-            val_every = 2):
+def trainer(
+        cfg,
+        model,
+        train_loader,
+        val_loader,
+        optimizer,
+        loss_func,
+        acc_func,
+        scheduler,
+        model_inferer,
+        post_sigmoid,
+        post_pred,  # pasa inferer aquí
+        augmenter,
+        scaler,
+        device,
+        optimize,
+        start_epoch,    # añade start_epoch antes de max_epochs
+        max_epochs,
+        val_every,
+        ):
     """
     train and validate the model
 
@@ -533,7 +533,7 @@ def main(cfg: DictConfig):
     
     # Efficient training on the gpu 
     torch.backends.cudnn.benchmark = True
-    optimize = getattr(cfg.training, 'OPtimize', False)
+    optimize  = bool(cfg.training.Optimize)
     dl_args = dict(batch_size=cfg.training.batch_size,
                    shuffle=True, pin_memory=True)
     if optimize: 
@@ -642,7 +642,7 @@ def main(cfg: DictConfig):
                          enable_gc=True).to(device)
         
     print('Chosen Network Architecture: {}'.format(cfg.model.architecture))
-    
+
     # roi = cfg.model.roi
     # Sliding window inference on evaluation dataset.
     # model_inferer = partial(
@@ -678,8 +678,11 @@ def main(cfg: DictConfig):
                        weight_decay=cfg.training.weight_decay)
     optimizer = solver.select_solver(cfg.training.solver_name)
 
-     # Max epochs
-    max_epochs = cfg.training.max_epochs
+    # Max epochs
+    if cfg.training.resume and cfg.training.new_max_epochs is not None:
+        max_epochs = cfg.training.new_max_epochs
+    else:
+        max_epochs = cfg.training.max_epochs
 
     # Learning rate schedulers
     if cfg.model.architecture == "segres_net":
@@ -715,7 +718,7 @@ def main(cfg: DictConfig):
         model_inferer=model_inferer,
         post_sigmoid=post_sigmoid,
         post_pred=post_pred,
-        max_epochs=cfg.training.max_epochs,
+        max_epochs= max_epochs,
         val_every=val_every,
         optimize=optimize,
         augmenter=augmenter,
