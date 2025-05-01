@@ -18,7 +18,7 @@ from monai.data import  decollate_batch
 import torch
 import torch.nn as nn
 from torch.backends import cudnn
-
+from torch.cuda.amp import autocast, GradScaler
 from monai.metrics import DiceMetric, HausdorffDistanceMetric
 from monai.utils.enums import MetricReduction
 from networks.models.ResUNetpp.model import ResUnetPlusPlus
@@ -164,8 +164,8 @@ def train_epoch(model, loader, optimizer, loss_func, augment = True):
     return run_loss.avg
 
 # Validate the model
-def val(model, loader, acc_func, model_inferer = None,
-        post_sigmoid = None, post_pred = None, post_label=None):
+def val(model, loader, acc_func, model_inferer,
+        post_sigmoid, post_pred, device):
     """
     Validation phase
     use model and validation dataset to validate the model performance on 
@@ -182,7 +182,6 @@ def val(model, loader, acc_func, model_inferer = None,
     post_sigmoid: monai.transforms.post.array.Activations
     post_pred:monai.transforms.post.array.AsDiscrete
     """
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.eval()
     run_acc = AverageMeter()
     with torch.no_grad():
@@ -196,7 +195,42 @@ def val(model, loader, acc_func, model_inferer = None,
             acc, not_nans = acc_func.aggregate()
             run_acc.update(acc.cpu().numpy(), n = not_nans.cpu().numpy())
     return run_acc.avg
+# Optimized train and validation
 
+def train_epoch_opt(model, loader, optimizer, loss_func, augmenter, scaler, device):
+    model.train()
+    meter = AverageMeter()
+    for batch in loader:
+        imgs = batch["image"].to(device, non_blocking=True)
+        lbls = batch["label"].to(device, non_blocking=True)
+        imgs, lbls = augmenter(imgs, lbls)
+        optimizer.zero_grad()
+        with autocast():
+            preds = model(imgs)
+            loss = loss_func(preds, lbls)
+        scaler.scale(loss).backward()
+        scaler.step(optimizer)
+        scaler.update()
+        meter.update(loss.item(), n=imgs.size(0))
+        wandb.log({"train/loss_batch": loss.item()})
+    return meter.avg
+
+
+def val_opt(model, loader, acc_func, inferer, post_sigmoid, post_pred, device):
+    model.eval()
+    all_preds, all_lbls = [], []
+    with torch.no_grad():
+        for batch in loader:
+            imgs = batch["image"].to(device, non_blocking=True)
+            lbls = decollate_batch(batch["label"].to(device))
+            logits = inferer(imgs)
+            all_preds.extend(decollate_batch(logits))
+            all_lbls.extend(lbls)
+    processed = [post_pred(post_sigmoid(p)) for p in all_preds]
+    acc_func.reset()
+    acc_func(y_pred=processed, y=all_lbls)
+    metrics, _ = acc_func.aggregate()
+    return metrics.cpu().numpy()
 # Save trained results
 def save_data(training_loss,
               et, wt, tc,
@@ -237,6 +271,11 @@ def trainer(cfg,
             loss_func,
             acc_func,
             scheduler,
+            iferer,
+            augmenter,
+            scaler,
+            device,
+            optimize,
             max_epochs = 100,
             model_inferer = None,
             start_epoch = 0,
@@ -271,10 +310,18 @@ def trainer(cfg,
     for epoch in range(start_epoch, max_epochs):
         print()
         epoch_time = time.time()
-        training_loss = train_epoch(model = model,
-                                    loader = train_loader,
-                                    optimizer = optimizer,
-                                    loss_func = loss_func)
+        if optimize:
+            train_epoch_opt(model = model, loader = train_loader,
+                            optimizer = optimizer,
+                            loss_func = loss_func, 
+                            augmenter = augmenter, 
+                            scaler = scaler, 
+                            device = device)
+        else:
+            training_loss = train_epoch(model = model,
+                                        loader = train_loader,
+                                        optimizer = optimizer,
+                                        loss_func = loss_func)
         print(
             "Epoch  {}/{},".format(epoch + 1, max_epochs),
             "loss: {:.4f},".format(training_loss),
@@ -293,15 +340,26 @@ def trainer(cfg,
         if epoch % val_every == 0 or epoch == 0:
             epoch_losses.append(training_loss)
             train_epochs.append(int(epoch))
-            val_acc = val(
-                model=model,  # Parámetro añadido
-                loader=val_loader,
-                acc_func=acc_func,
-                model_inferer=model_inferer,
-                post_sigmoid=post_sigmoid,
-                post_pred=post_pred, 
-                post_label=post_label
-            )
+            if optimize:
+                val_acc = val(
+                    model=model,  # Parámetro añadido
+                    loader=val_loader,
+                    acc_func=acc_func,
+                    model_inferer=model_inferer,
+                    post_sigmoid=post_sigmoid,
+                    post_pred=post_pred, 
+                    device=device
+                )
+            else:
+                val_acc = val(
+                    model=model,  # Parámetro añadido
+                    loader=val_loader,
+                    acc_func=acc_func,
+                    model_inferer=model_inferer,
+                    post_sigmoid=post_sigmoid, 
+                    post_pred=post_pred,
+                    device=device
+                )
             dice_tc = val_acc[0]
             dice_wt = val_acc[1]
             dice_et = val_acc[2]
@@ -366,20 +424,12 @@ def trainer(cfg,
         training_loss,
         train_epochs)
 
-def run(cfg, model,
-        loss_func,
-        acc_func,
-        optimizer,
-        train_loader,
-        val_loader,
-        scheduler,
-        model_inferer = None,
-        post_sigmoid = None, 
-        post_pred = None,
-        post_label = None,
-        max_epochs = 100,
-        val_every = 2
-        ):
+def run(cfg, model, loss_func, acc_func, optimizer,
+        train_loader, val_loader, scheduler,
+        model_inferer=None, post_sigmoid=None,
+        post_pred=None, post_label=None,
+        max_epochs=100, val_every=2,
+        optimize=False, augmenter=None, scaler=None, device='cpu'):
     '''Now train the model
     
     Parameters
@@ -434,23 +484,10 @@ def run(cfg, model,
     dices_mean,
     train_losses,
     train_epochs,
-    ) = trainer(
-        cfg, 
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        optimizer=optimizer,
-        loss_func=loss_func,
-        acc_func=acc_func,
-        scheduler=scheduler,
-        model_inferer=model_inferer,
-        start_epoch=start_epoch,
-        max_epochs= max_epochs,
-        post_sigmoid=post_sigmoid,
-        val_every=val_every,
-        post_pred=post_pred,
-        post_label=post_label
-    )
+    ) = trainer(cfg, model, train_loader, val_loader, optimizer, loss_func,
+            acc_func, scheduler, model_inferer, post_sigmoid, post_pred,
+            start_epoch, max_epochs, val_every,
+            optimize, augmenter, scaler, device)
     print()
     return (val_mean_dice_max, 
             dices_tc,
@@ -496,6 +533,15 @@ def main(cfg: DictConfig):
     
     # Efficient training on the gpu 
     torch.backends.cudnn.benchmark = True
+    optimize = getattr(cfg.training, 'OPtimize', False)
+    dl_args = dict(batch_size=cfg.training.batch_size,
+                   shuffle=True, pin_memory=True)
+    if optimize: 
+        dl_args.update(num_workers=cfg.training.num_workers,
+                       persistent_workers=True,
+                       prefetch_factor=2)
+    else:
+        dl_args.update(num_workers=cfg.training.num_workers)
 
     # BraTS configs
     if cfg.dataset.type == "brats":
@@ -596,16 +642,22 @@ def main(cfg: DictConfig):
                          enable_gc=True).to(device)
         
     print('Chosen Network Architecture: {}'.format(cfg.model.architecture))
-    roi = cfg.model.roi
-
-    # Sliding window inference on evaluation dataset.
-    model_inferer = partial(
-                        sliding_window_inference,
-                        roi_size=[roi] * 3, 
-                        sw_batch_size=cfg.training.sw_batch_size,
-                        predictor=model,
-                        overlap=cfg.model.infer_overlap)
     
+    # roi = cfg.model.roi
+    # Sliding window inference on evaluation dataset.
+    # model_inferer = partial(
+    #                     sliding_window_inference,
+    #                     roi_size=[roi] * 3, 
+    #                     sw_batch_size=cfg.training.sw_batch_size,
+    #                     predictor=model,
+    #                     overlap=cfg.model.infer_overlap)
+    model_inferer = partial(
+        sliding_window_inference,
+        roi_size=[240, 240, 160],
+        sw_batch_size=cfg.training.sw_batch_size,
+        predictor=model,
+        overlap=cfg.model.infer_overlap,
+    )
     # Validation frequency
     val_every = cfg.training.val_every
 
@@ -653,21 +705,22 @@ def main(cfg: DictConfig):
                                             batch_size=batch_size, 
                                             shuffle=False, num_workers=num_workers, 
                                             pin_memory=True)
+        # Optional optimizer helpers
+    augmenter = DataAugmenter().to(device) if optimize else None
+    scaler    = GradScaler()              if optimize else None
     wandb.watch(model, log="all", log_freq=cfg.training.val_every)
     # Training
-    run(cfg, model=model,
-        loss_func= loss_func,
-        acc_func= acc_func,
-        optimizer= optimizer,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        scheduler=scheduler,
+    run(cfg, model, loss_func, acc_func, optimizer,
+        train_loader, val_loader, scheduler,
         model_inferer=model_inferer,
-        post_label = None,
-        post_sigmoid = post_sigmoid,
+        post_sigmoid=post_sigmoid,
         post_pred=post_pred,
-        max_epochs=max_epochs,
-        val_every=val_every)
+        max_epochs=cfg.training.max_epochs,
+        val_every=val_every,
+        optimize=optimize,
+        augmenter=augmenter,
+        scaler=scaler,
+        device=device)
         
 if __name__ == "__main__":
     main()
