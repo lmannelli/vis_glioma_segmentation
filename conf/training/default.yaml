@@ -9,6 +9,7 @@ weight_decay: 0.00001
 solver_name: Adam
 loss_type: dice
 pretrained: False
+pretrained_path: None #"ruta/a/mi_pretrained.pth"
 resume: False
 seed: 123
 colab: False

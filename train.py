@@ -12,13 +12,14 @@ import wandb
 import psutil
 from utils.meter import AverageMeter
 from utils.general import save_checkpoint, load_pretrained_model, resume_training
+import hydra
 from brats import get_datasets
 from omegaconf import OmegaConf, DictConfig
-from monai.data import  decollate_batch
+from monai.data import decollate_batch, DataLoader
 import torch
 import torch.nn as nn
 from torch.backends import cudnn
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 from monai.metrics import DiceMetric, HausdorffDistanceMetric
 from monai.utils.enums import MetricReduction
 from networks.models.ResUNetpp.model import ResUnetPlusPlus
@@ -44,703 +45,297 @@ from utils.schedulers import SegResNetScheduler, PolyDecayScheduler
 
 # Configure logger
 import logging
-import hydra
-from omegaconf import DictConfig
-
+# ————————————————————————————————————————————————————————————————
+# Logger
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-
 os.makedirs("logger", exist_ok=True)
-file_handler = logging.FileHandler(filename= "logger/train_logger.log")
-stream_handler = logging.StreamHandler()
-formatter = logging.Formatter(fmt= "%(asctime)s: %(message)s", datefmt= '%Y-%m-%d %H:%M:%S')
-file_handler.setFormatter(formatter)
-stream_handler.setFormatter(formatter)
+fh = logging.FileHandler("logger/train_logger.log")
+fmt = logging.Formatter("%(asctime)s %(message)s", "%Y-%m-%d %H:%M:%S")
+fh.setFormatter(fmt)
+logger.addHandler(fh)
+logger.addHandler(logging.StreamHandler())
 
-logger.addHandler(file_handler)
-logger.addHandler(stream_handler)
-
-class CIdentity(nn.Module):
-    """identify mapping a list of values """
-    def __init__(self):
-        super().__init__()
-        self.model = nn.Identity()
-    
-    def forward(self, x, y):
-        x = nn.Identity(x)
-        y = nn.Identity(y)
-        return (x, y)
-    
-class Solver:
-    """list of optimizers for training NN"""
-    def __init__(self, model: nn.Module, lr: float = 1e-4, weight_decay: float = 1e-5):
-        self.lr = lr
-        self.weight_decay = weight_decay
-
-        self.all_solvers = {
-            "Adam": torch.optim.Adam(model.parameters(), lr=self.lr, 
-                                     weight_decay= self.weight_decay, 
-                                     amsgrad=True), 
-            "AdamW": torch.optim.AdamW(model.parameters(), lr=self.lr, 
-                                     weight_decay= self.weight_decay, 
-                                     amsgrad=True),
-            "SGD": torch.optim.SGD(model.parameters(), lr=self.lr, 
-                                     weight_decay= self.weight_decay),
-        }
-    def select_solver(self, name):
-        return self.all_solvers[name]
-    
-
-def save_best_model(dir_name, model, name="best_model"):
-    """save best model weights"""
-    save_path = os.path.join(dir_name, name)
-    torch.save(model.state_dict(), f"{save_path}/{name}.pkl")
-    
-def save_checkpoint(dir_name, state, name="checkpoint"):
-    """save checkpoint with each epoch to resume"""
-    save_path = os.path.join(dir_name, name)
-    torch.save(state, f"{save_path}/{name}.pth.tar")
- 
-def compute_loss(loss, preds, label):
-        loss = loss(preds[0], label)
-        for i, pred in enumerate(preds[1:]):
-            downsampled_label = nn.functional.interpolate(label, pred.shape[2:])
-            loss += 0.5 ** (i + 1) * loss(pred, downsampled_label)
-        c_norm = 1 / (2 - 2 ** (-len(preds)))
-        return c_norm * loss
-
-
-def create_dirs(dir_name):
-    """create experiment directory storing
-    checkpoint and best weights"""
-    os.makedirs(dir_name, exist_ok=True)
-    os.makedirs(os.path.join(dir_name, "checkpoint"), exist_ok=True)
-    os.makedirs(os.path.join(dir_name, "best-model"), exist_ok=True)
-
-def init_random(seed):
-    """randomly initialize some options"""
-    torch.manual_seed(seed)        
-    torch.cuda.manual_seed(seed)  
-    torch.cuda.manual_seed_all(seed) 
+# ————————————————————————————————————————————————————————————————
+def init_random(seed: int):
     random.seed(seed)
-    np.random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    cudnn.benchmark = False         
-    cudnn.deterministic = True
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    cudnn.benchmark = True      # kernels óptimos
+    cudnn.deterministic = False
 
-# Train for an epoch
-def train_epoch(model, loader, optimizer, loss_func, augment = True):
-    """
-    train the model for epoch on MRI image and given ground truth labels
-    using set of arguments
-    
-    Parameters
-    ----------
-    model: nn.Module
-    loader: torch.utils.data.Dataset
-    optimizer: torch.optim.adamw.AdamW
-    loss_func: monai.losses.dice.DiceLoss
-    epoch: int
-    """
-    # dyn_loss = LossBraTS(focal=False)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    augmenter = DataAugmenter().to(device)
-    torch.cuda.empty_cache()
-    gc.collect()
-    # del variables
-    model.train() 
-    run_loss = AverageMeter()
-    for batch_data in loader:
-        image, label = batch_data["image"].to(device), batch_data["label"].to(device)
-        image, label = augmenter(image, label) if augment else (image, label)
-        logits = model(image)
-        loss = loss_func(logits, label) 
-        loss.backward()
-        optimizer.step()
-        optimizer.zero_grad()
-        run_loss.update(loss.item(), n = batch_data["image"].shape[0])
-        wandb.log({"train/loss_batch": loss.item()})
-    torch.cuda.empty_cache()
-    return run_loss.avg
+def create_dirs(exp_name: str):
+    os.makedirs(exp_name, exist_ok=True)
+    os.makedirs(f"{exp_name}/checkpoint", exist_ok=True)
+    os.makedirs(f"{exp_name}/best-model", exist_ok=True)
 
-# Validate the model
-def val(model, loader, acc_func, model_inferer,
-        post_sigmoid, post_pred, device):
-    """
-    Validation phase
-    use model and validation dataset to validate the model performance on 
-    validation dataset.
+def save_best_model(exp_name: str, model: nn.Module):
+    torch.save(model.state_dict(), f"{exp_name}/best-model/best_model.pt")
 
-    Parameters
-    ----------
-    model: nn.Module
-    loader: torch.util.data.Dataset
-    acc_func: monai.metrics.meandice.DiceMetric 
-    num_epochs: int
-    epochs: int
-    model_inferer: nn.Module
-    post_sigmoid: monai.transforms.post.array.Activations
-    post_pred:monai.transforms.post.array.AsDiscrete
-    """
-    model.eval()
-    run_acc = AverageMeter()
-    with torch.no_grad():
-        for batch_data in loader:
-            logits = model_inferer(batch_data["image"].to(device))
-            masks = decollate_batch(batch_data["label"].to(device)) 
-            prediction_lists = decollate_batch(logits)
-            predictions = [post_pred(post_sigmoid(prediction)) for prediction in prediction_lists]
-            acc_func.reset()
-            acc_func(y_pred = predictions, y = masks)
-            acc, not_nans = acc_func.aggregate()
-            run_acc.update(acc.cpu().numpy(), n = not_nans.cpu().numpy())
-    return run_acc.avg
-# Optimized train and validation
+def save_data(training_loss, et, wt, tc, mean_dice, epochs, cfg):
+    data = {
+        "training_loss": training_loss,
+        "WT": wt,
+        "ET": et,
+        "TC": tc,
+        "mean_dice": mean_dice,
+        "epoch": epochs
+    }
+    df = pd.DataFrame(data)
+    path = os.path.join(cfg.training.exp_name, "csv")
+    os.makedirs(path, exist_ok=True)
+    df.to_csv(os.path.join(path, "training_data.csv"), index=False)
+    return df
 
-def train_epoch_opt(model, loader, optimizer, loss_func, augmenter, scaler, device):
+# ————————————————————————————————————————————————————————————————
+def train_epoch(model, loader, optimizer, loss_fn, scaler, augmenter, device):
     model.train()
     meter = AverageMeter()
     for batch in loader:
         imgs = batch["image"].to(device, non_blocking=True)
         lbls = batch["label"].to(device, non_blocking=True)
         imgs, lbls = augmenter(imgs, lbls)
+
         optimizer.zero_grad()
         with autocast():
             preds = model(imgs)
-            loss = loss_func(preds, lbls)
+            loss = loss_fn(preds, lbls)
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
+
         meter.update(loss.item(), n=imgs.size(0))
-        wandb.log({"train/loss_batch": loss.item()})
     return meter.avg
 
-
-def val_opt(model, loader, acc_func, inferer, post_sigmoid, post_pred, device):
+@torch.no_grad()
+def validate(model, loader, inferer, post_sigmoid, post_pred, acc_fn, device):
     model.eval()
     all_preds, all_lbls = [], []
-    with torch.no_grad():
-        for batch in loader:
-            imgs = batch["image"].to(device, non_blocking=True)
-            lbls = decollate_batch(batch["label"].to(device))
-            logits = inferer(imgs)
-            all_preds.extend(decollate_batch(logits))
-            all_lbls.extend(lbls)
-    processed = [post_pred(post_sigmoid(p)) for p in all_preds]
-    acc_func.reset()
-    acc_func(y_pred=processed, y=all_lbls)
-    metrics, _ = acc_func.aggregate()
-    return metrics.cpu().numpy()
-# Save trained results
-def save_data(training_loss,
-              et, wt, tc,
-              val_mean_acc,
-              epochs, cfg):
-    """
-    save the training data for later use
-    
-    Parameters
-    ----------
-    training_loss: list
-    et: list
-    wt: list
-    tc: list
-    val_mean_acc: list
-    val_losses: list
-    tarining_dices: list,
-    epochs: list
-    """
-    data = {}
-    NAMES = ["training_loss", "WT", "ET", "TC", "mean_dice",
-             "epochs"]
-    data_lists = [training_loss, wt, et, tc, val_mean_acc,
-                  epochs]
-    for i in range(len(NAMES)):
-        data[f"{NAMES[i]}"] = data_lists[i]
-    data_df = pd.DataFrame(data)
-    save_path = os.path.join(cfg.training.exp_name, "csv")
-    os.makedirs(save_path, exist_ok=True)
-    data_df.to_csv(os.path.join(save_path, "training_data.csv"))
-    return data
+    for batch in loader:
+        imgs = batch["image"].to(device, non_blocking=True)
+        lbls = decollate_batch(batch["label"].to(device))
+        logits = inferer(imgs)
+        all_preds.extend(decollate_batch(logits))
+        all_lbls.extend(lbls)
+    processed = [post_pred(post_sigmoid(x)) for x in all_preds]
+    acc_fn.reset()
+    acc_fn(y_pred=processed, y=all_lbls)
+    metrics, _ = acc_fn.aggregate()
+    return metrics.cpu().numpy()  # array [TC, WT, ET]
 
-def trainer(
-        cfg,
-        model,
-        train_loader,
-        val_loader,
-        optimizer,
-        loss_func,
-        acc_func,
-        scheduler,
-        model_inferer,
-        post_sigmoid,
-        post_pred,  # pasa inferer aquí
-        augmenter,
-        scaler,
-        device,
-        optimize,
-        start_epoch,    # añade start_epoch antes de max_epochs
-        max_epochs,
-        val_every,
-        ):
-    """
-    train and validate the model
-
-    model: nn.Module
-    train_loader: torch.utils.data.Dataset
-    val_loader: torch.utils.data.Dataset
-    optimizer: torch.optim
-    loss_func: monai.losses.dice.DiceLoss
-    acc_func:  monai.metrics.meandice.DiceMetric 
-    schedular: torch.optim.lr_scheduler.CosineAnnealingLR
-    max_epochs: int
-    model_inferer: nn.Module
-    start_epoch: int
-    post_sigmoid: monai.transforms.post.array.Activations
-    post_pred: monai.transforms.post.array.AsDiscrete
-    """
-    val_acc_max = 0
-    dices_tc = []
-    dices_wt = []
-    dices_et = []
-    dices_mean = []
-
-    epoch_losses = [] # training loss
-    train_epochs = []
-    for epoch in range(start_epoch, max_epochs):
-        print()
-        epoch_time = time.time()
-        if optimize:
-            train_epoch_opt(model = model, loader = train_loader,
-                            optimizer = optimizer,
-                            loss_func = loss_func, 
-                            augmenter = augmenter, 
-                            scaler = scaler, 
-                            device = device)
-        else:
-            training_loss = train_epoch(model = model,
-                                        loader = train_loader,
-                                        optimizer = optimizer,
-                                        loss_func = loss_func)
-        print(
-            "Epoch  {}/{},".format(epoch + 1, max_epochs),
-            "loss: {:.4f},".format(training_loss),
-            "time {:.2f} m,".format((time.time() - epoch_time)/60),
-            end=""
-        )
-        # Log training metrics
-        log_data = {
-            "train/loss": training_loss,
-            "lr": optimizer.param_groups[0]['lr'],
-            "epoch": epoch,
-            "system/gpu_mem": torch.cuda.max_memory_allocated() / 1e9,
-            "system/cpu_usage": psutil.cpu_percent()
-        }
-
-        if epoch % val_every == 0 or epoch == 0:
-            epoch_losses.append(training_loss)
-            train_epochs.append(int(epoch))
-            if optimize:
-                val_acc = val(
-                    model=model,  # Parámetro añadido
-                    loader=val_loader,
-                    acc_func=acc_func,
-                    model_inferer=model_inferer,
-                    post_sigmoid=post_sigmoid,
-                    post_pred=post_pred, 
-                    device=device
-                )
-            else:
-                val_acc = val(
-                    model=model,  # Parámetro añadido
-                    loader=val_loader,
-                    acc_func=acc_func,
-                    model_inferer=model_inferer,
-                    post_sigmoid=post_sigmoid, 
-                    post_pred=post_pred,
-                    device=device
-                )
-            dice_tc = val_acc[0]
-            dice_wt = val_acc[1]
-            dice_et = val_acc[2]
-            val_mean_acc = np.mean(val_acc)
-        
-
-            print(
-                " Validation: "
-                " dice_tc:", "{:.4f},".format(dice_tc),
-                " dice_wt:", "{:.4f},".format(dice_wt),
-                " dice_et:", "{:.4f},".format(dice_et),
-                " mean_dice:", "{:.4f}".format(val_mean_acc),
-                )
-            
-            dices_tc.append(dice_tc)
-            dices_wt.append(dice_wt)
-            dices_et.append(dice_et)
-            dices_mean.append(val_mean_acc)
-            # Actualiza log_data con métricas de validación
-            log_data.update({
-                "val/dice_tc": dice_tc,
-                "val/dice_wt": dice_wt,
-                "val/dice_et": dice_et,
-                "val/mean_dice": val_mean_acc
-            })
-            if val_mean_acc > val_acc_max:
-                val_acc_max = val_mean_acc
-                save_best_model(cfg.training.exp_name, model, "best-model")
-                # Guarda el mejor modelo en W&B
-                torch.save(model.state_dict(), "best_model.pth")
-                wandb.save("best_model.pth")
-            scheduler.step()
-            save_checkpoint(cfg.training.exp_name, dict(epoch=epoch + 1, max_epochs=max_epochs, model = model.state_dict(), optimizer=optimizer.state_dict(), scheduler=scheduler.state_dict()), "checkpoint")
-
-        # Envía todos los datos a W&B
-        wandb.log(log_data)
-    print()
-    print("Training Finished!, Best Accuracy: ", val_acc_max)
-
-    # Save important data
-    save_data(training_loss=training_loss,
-              et= dices_et,
-              wt= dices_wt,
-              tc=dices_tc,
-              val_mean_acc=dices_mean,
-              epochs=train_epochs, 
-              cfg = cfg)
-    wandb.log({
-        "Dice_TC_curve": wandb.plot.line_series(
-            xs=train_epochs, ys=[dices_tc], keys=["TC"], title="Dice TC", xname="Epoch"),
-        "Dice_WT_curve": wandb.plot.line_series(
-            xs=train_epochs, ys=[dices_wt], keys=["WT"], title="Dice WT", xname="Epoch"),
-        "Dice_ET_curve": wandb.plot.line_series(
-            xs=train_epochs, ys=[dices_et], keys=["ET"], title="Dice ET", xname="Epoch")
-    })
-    return (
-        val_acc_max,
-        dices_tc,
-        dices_wt,
-        dices_et,
-        dices_mean,
-        training_loss,
-        train_epochs)
-
-def run(cfg, model, loss_func, acc_func, optimizer,
-        train_loader, val_loader, scheduler,
-        model_inferer=None, post_sigmoid=None,
-        post_pred=None, post_label=None,
-        max_epochs=100, val_every=2,
-        optimize=False, augmenter=None, scaler=None, device='cpu'):
-    '''Now train the model
-    
-    Parameters
-    ----------
-    args: argparse.parser
-    model: nn.Module
-    acc_func:  monai.metrics.meandice.DiceMetric
-    loss_func: monai.losses.dice.DiceLoss
-    optimizer: torch.optim.adamw.AdamW
-    train_loader: torch.utils.data.Dataset
-    val_loader: torch.utils.data.Dataset
-    schedular:  torch.optim.lr_scheduler.CosineAnnealingLR
-    model_inferer: nn.Module
-    post_sigmoid: monai.transforms.post.array.Activations
-    post_pred:monai.transforms.post.array.AsDiscrete
-    max_epochs: int
-    start_epoch: int
-    val_every: int
-    '''
-    # Create experiments folders
-    create_dirs(cfg.training.exp_name)
-
-    # resume 
-    if cfg.training.resume:
-        print('Resuming training...')
-        checkpoint = torch.load(os.path.join(cfg.training.exp_name, "checkpoint", "checkpoint.pth.tar"))
-        model.load_state_dict(checkpoint['model'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
-        start_epoch = checkpoint['epoch']
-        # Extend training from saved ckpt
-        if cfg.training.new_max_epochs is not None:
-            max_epochs = cfg.training.new_max_epochs
-        else:
-            max_epochs = checkpoint["max_epochs"]
-        scheduler.load_state_dict(checkpoint['scheduler'])
-        print(f"start train from epoch = {start_epoch}/{max_epochs}")
-
-    else:
-        # Training from scratch
-        print('Trainig from scrath!')
-        start_epoch = 0
-
-    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print()
-    print("Total parameters count", total_params)
-
-    (
-    val_mean_dice_max,
-    dices_tc,
-    dices_wt,
-    dices_et,
-    dices_mean,
-    train_losses,
-    train_epochs,
-    ) =     trainer(
-        cfg,
-        model,
-        train_loader,
-        val_loader,
-        optimizer,
-        loss_func,
-        acc_func,
-        scheduler,
-        model_inferer,
-        post_sigmoid,
-        post_pred,
-        augmenter,
-        scaler,
-        device,
-        optimize,
-        start_epoch,
-        max_epochs,
-        val_every,
-    )
-
-    print()
-    return (val_mean_dice_max, 
-            dices_tc,
-            dices_wt,
-            dices_et,
-            dices_mean,
-            train_losses,
-            train_epochs)
-
-@hydra.main(config_name='configs', config_path= 'conf', version_base=None)
+# ————————————————————————————————————————————————————————————————
+@hydra.main(config_path="conf", config_name="configs", version_base=None)
 def main(cfg: DictConfig):
-
-    wandb_config = OmegaConf.to_container(cfg, resolve=True)
-     # 1. Crear carpeta de experimentos
+    # setup
+    init_random(cfg.training.seed)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     create_dirs(cfg.training.exp_name)
-    
-    # 2. Leer run_id anterior (si existe)
-    run_id_path = os.path.join(cfg.training.exp_name, "wandb_run_id.txt")
-    if os.path.isfile(run_id_path):
-        with open(run_id_path) as f:
-            prev_run_id = f.read().strip()
-    else:
-        prev_run_id = None
-
-    # 3. Login y init/reanudar W&B
     wandb.login(key=cfg.training.wand_api_key)
-    wandb_run = wandb.init(
+    wandb.init(
         project=cfg.training.project_name,
         name=cfg.training.exp_name,
-        id=prev_run_id,
+        config=OmegaConf.to_container(cfg, resolve=True),
         resume="allow",
-        config=wandb_config,             
     )
-    # Si es nuevo, guardo id
-    if prev_run_id is None:
-        with open(run_id_path, "w") as f:
-            f.write(wandb_run.id)
-    # Initialize random
-    init_random(seed=cfg.training.seed)
 
-    # device: CUDA or CPU (hardware accelerator)
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    
-    # Efficient training on the gpu 
-    torch.backends.cudnn.benchmark = True
-    optimize  = bool(cfg.training.Optimize)
-    dl_args = dict(batch_size=cfg.training.batch_size,
-                   shuffle=True, pin_memory=True)
-    if optimize: 
-        dl_args.update(num_workers=cfg.training.num_workers,
-                       persistent_workers=True,
-                       prefetch_factor=2)
+    # Data
+    train_ds = get_datasets(cfg.dataset.dataset_folder, "train", target_size=(128,128,128))
+    val_ds   = get_datasets(cfg.dataset.dataset_folder, "val",   target_size=(128,128,128))
+    train_loader = DataLoader(
+        train_ds,
+        batch_size=cfg.training.batch_size,
+        shuffle=True,
+        num_workers=cfg.training.num_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2,
+    )
+    val_loader = DataLoader(
+        val_ds,
+        batch_size=cfg.training.batch_size,
+        shuffle=False,
+        num_workers=cfg.training.num_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        prefetch_factor=2,
+    )
+
+    # Model
+    arch = cfg.model.architecture
+    if arch == "segres_net":
+        model = SegResNet(spatial_dims=3, init_filters=32,
+                          in_channels=4, out_channels=3,
+                          dropout_prob=0.2,
+                          blocks_down=(1,2,2,4),
+                          blocks_up=(1,1,1))
+    elif arch == "unet3d":
+        model = UNet3D(in_channels=4, num_classes=3)
+    elif arch == "v_net":
+        model = VNet(spatial_dims=3, in_channels=4, out_channels=3)
+    elif arch == "attention_unet":
+        model = AttentionUnet(spatial_dims=3, in_channels=4, out_channels=3)
+    elif arch == "resunet_pp":
+        model = ResUnetPlusPlus(in_channels=4, out_channels=3)
+    elif arch == "unet_r":
+        model = UNETR(in_channels=4, out_channels=3, img_size=(128,128,128))
+    elif arch == "swinunet_r":
+        model = SwinUNETR(img_size=128, in_channels=4, out_channels=3,
+                          feature_size=48, drop_rate=0.1, attn_drop_rate=0.2,
+                          spatial_dims=3)
+    elif arch == "ux_net":
+        model = UXNET(in_chans=4, out_chans=3,
+                      depths=[2,2,2,2], feat_size=[48,96,192,384],
+                      spatial_dims=3)
+    elif arch == "nn_former":
+        model = nnFormer(crop_size=(128,128,128), embedding_dim=96,
+                         input_channels=4, num_classes=3,
+                         depths=[2,2,2,2], num_heads=[3,6,12,24],
+                         deep_supervision=False)
+    elif arch == "seg_uxnet" and SegUXNet:
+        model = SegUXNet(spatial_dims=3, init_filters=32,
+                         in_channels=4, out_channels=3)
     else:
-        dl_args.update(num_workers=cfg.training.num_workers)
-
-    # BraTS configs
-    if cfg.dataset.type == "brats":
-        num_classes = 3
-        in_channels = 4
-        crop_size = (128, 128, 128)
-        post_pred = AsDiscrete(argmax=False, threshold=0.5)
-        post_sigmoid = Activations(sigmoid=True)
-        
-    spatial_size = 3
-
-
-    # SegResNet
-    if cfg.model.architecture == "segres_net":
-        model = SegResNet(spatial_dims=spatial_size, 
-                          init_filters=32, 
-                          in_channels=in_channels, 
-                          out_channels=num_classes, 
-                          dropout_prob=0.2, 
-                          blocks_down=(1, 2, 2, 4), 
-                          blocks_up=(1, 1, 1)).to(device)
-    # UNET
-    elif cfg.model.architecture == "unet3d":
-        model = UNet3D(in_channels=in_channels, 
-                       num_classes=num_classes).to(device)
-        
-    # VNet
-    elif cfg.model.architecture == "v_net":
-        model = VNet(spatial_dims=spatial_size, 
-                     in_channels=in_channels, 
-                     out_channels=num_classes,
-                     dropout_dim=1,
-                     bias= False
-                        ).to(device)
-    # Attention UNet
-    elif cfg.model.architecture == "attention_unet":
-        model = AttentionUnet(spatial_dims=spatial_size, 
-                              in_channels=in_channels, 
-                              out_channels=num_classes, 
-                              channels= (8, 16, 32, 64, 128), 
-                              strides = (2, 2, 2, 2),
-                                           ).to(device)
-    # ResUNetpp
-    elif cfg.model.architecture == "resunet_pp":
-        model = ResUnetPlusPlus(in_channels=in_channels,
-                                out_channels=num_classes).to(device)
-    # UNETR
-    elif cfg.model.architecture == "unet_r":
-       model =  UNETR(in_channels=in_channels, 
-                     out_channels=num_classes, 
-                     img_size=crop_size, 
-                     proj_type='conv', 
-                     norm_name='instance').to(device)
-    # SwinUNETR
-    elif cfg.model.architecture == "swinunet_r":
-        model = SwinUNETR(
-                img_size=crop_size[0],
-                in_channels=in_channels,
-                out_channels=num_classes,
-                feature_size=48,
-                drop_rate=0.1,
-                attn_drop_rate=0.2,
-                dropout_path_rate=0.1,
-                spatial_dims=spatial_size,
-                use_checkpoint=False,
-                use_v2=False).to(device)
-    # UXNet
-    elif cfg.model.architecture == "ux_net":
-        model = UXNET(in_chans= in_channels, 
-                      out_chans= num_classes,
-                      depths=[2, 2, 2, 2],
-                      feat_size=[48, 96, 192, 384],
-                      drop_path_rate=0,
-                      layer_scale_init_value=1e-6, 
-                      spatial_dims=spatial_size).to(device)
+        raise ValueError(f"Unknown arch {arch}")
     
-    # nnFormer
-    elif cfg.model.architecture == "nn_former":
-        model = nnFormer(crop_size=np.array(crop_size), 
-                         embedding_dim=96, 
-                         input_channels=in_channels, 
-                         num_classes=num_classes, 
-                         depths=[2, 2, 2, 2], 
-                         num_heads=[3, 6, 12, 24], 
-                         deep_supervision=False,
-                         conv_op=nn.Conv3d,
-                         patch_size= [4,4,4], 
-                         window_size=[4,4,8,4]).to(device)
-    # SegConvNet
-    elif cfg.model.architecture == "seg_uxnet":
-        model = SegUXNet(spatial_dims=3, 
-                         init_filters=32, 
-                         in_channels= in_channels,
-                         out_channels=num_classes, 
-                         dropout_prob=0.2, 
-                         blocks_down=(1, 2, 2, 4), 
-                         blocks_up=(1, 1, 1), 
-                         enable_gc=True).to(device)
-        
-    print('Chosen Network Architecture: {}'.format(cfg.model.architecture))
+    model = model.to(device)
 
-    # roi = cfg.model.roi
-    # Sliding window inference on evaluation dataset.
-    # model_inferer = partial(
-    #                     sliding_window_inference,
-    #                     roi_size=[roi] * 3, 
-    #                     sw_batch_size=cfg.training.sw_batch_size,
-    #                     predictor=model,
-    #                     overlap=cfg.model.infer_overlap)
-    model_inferer = partial(
+    if cfg.training.pretrained:
+        pretrained_path = cfg.training.pretrained_path  # agrégalo en tu config
+        model = load_pretrained_model(
+            model,
+            state_path=pretrained_path,
+            device=device,
+            strict=False            # o True si tus keys coinciden exactamente
+        )
+    # Loss
+    if cfg.training.loss_type == "dice":
+        loss_fn = DiceLoss(to_onehot_y=False, sigmoid=True)
+    else:
+        loss_fn = DiceCELoss(to_onehot_y=False, sigmoid=True)
+
+    # Metric / inferer
+    post_sigmoid = Activations(sigmoid=True)
+    post_pred    = AsDiscrete(argmax=False, threshold=0.5)
+    acc_fn       = DiceMetric(include_background=True,
+                              reduction=MetricReduction.MEAN_BATCH,
+                              get_not_nans=True)
+    inferer = partial(
         sliding_window_inference,
-        roi_size=[240, 240, 160],
+        roi_size=[240,240,160],
         sw_batch_size=cfg.training.sw_batch_size,
         predictor=model,
         overlap=cfg.model.infer_overlap,
     )
-    # Validation frequency
-    val_every = cfg.training.val_every
 
-    # Dice or Dice and Cross Entropy loss combined
-    if cfg.training.loss_type == "dice" and cfg.dataset.type == 'brats':
-        loss_func = DiceLoss(to_onehot_y=False, sigmoid=True)
-    elif cfg.training.loss_type == "dice" and cfg.dataset.type == 'btcv':
-        loss_func =  DiceCELoss(to_onehot_y=True, softmax=True)
-    elif cfg.training.loss_type == "dice_ce":
-        loss_func = DiceCELoss(to_onehot_y=False, sigmoid=True)
-
-    # Dice metric 
-    if cfg.dataset.type == 'brats':
-        acc_func =  DiceMetric(include_background=True, reduction=MetricReduction.MEAN_BATCH, 
-                                        get_not_nans=True)
-    # Optimizer
-    solver = Solver(model=model, lr=cfg.training.learning_rate, 
-                       weight_decay=cfg.training.weight_decay)
-    optimizer = solver.select_solver(cfg.training.solver_name)
-
-    # Max epochs
-    if cfg.training.resume and cfg.training.new_max_epochs is not None:
-        max_epochs = cfg.training.new_max_epochs
+    # Optimizer / scheduler / scaler / augmenter
+    optimizer = getattr(torch.optim, cfg.training.solver_name)(
+        model.parameters(),
+        lr=cfg.training.learning_rate,
+        weight_decay=cfg.training.weight_decay
+    )
+    if arch == "segres_net":
+        scheduler = SegResNetScheduler(optimizer, cfg.training.max_epochs, cfg.training.learning_rate)
+    elif arch == "nn_former":
+        scheduler = PolyDecayScheduler(optimizer,
+                                       total_epochs=cfg.training.max_epochs,
+                                       initial_lr=cfg.training.learning_rate)
     else:
-        max_epochs = cfg.training.max_epochs
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=cfg.training.max_epochs)
+    scaler = GradScaler()
+    augmenter = DataAugmenter().to(device)
 
-    # Learning rate schedulers
-    if cfg.model.architecture == "segres_net":
-        scheduler = SegResNetScheduler(optimizer, max_epochs, cfg.training.learning_rate)
-    elif cfg.model.architecture == "nn_former":
-        scheduler = PolyDecayScheduler(optimizer, total_epochs=max_epochs, initial_lr=cfg.training.learning_rate)
-    else:
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max_epochs)
-    
-    # Batch and workers
-    batch_size = cfg.training.batch_size
-    num_workers = cfg.training.num_workers
-    dataset_dir = cfg.dataset.dataset_folder
+    # Históricos
+    training_losses, dices_tc, dices_wt, dices_et, dices_mean, epochs_list = [], [], [], [], [], []
 
-    train_dataset = get_datasets(dataset_dir, "train", target_size=(128, 128, 128))
-    train_val_dataset = get_datasets(dataset_dir, "val", target_size=(128, 128, 128))
+    # Training loop
+    best_mean = 0.0
+    start_epoch = 0   
+    ckpt_dir  = os.path.join(cfg.training.exp_name, "checkpoint")
+    ckpt_path = os.path.join(ckpt_dir, "checkpoint.pth")
+    if cfg.training.resume:
+        if os.path.isfile(ckpt_path):
+            start_epoch, best_mean = resume_training(
+                model, optimizer, scheduler, ckpt_path, device
+            )
+            # si quieres aumentar el total de epochs al reanudar:
+            if cfg.training.new_max_epochs is not None:
+                cfg.training.max_epochs = cfg.training.new_max_epochs
+        else:
+            logger.warning(f"No se encontró checkpoint en {ckpt_path}; comenzando desde 0")
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, 
-                                            shuffle=True, num_workers=num_workers, 
-                                            drop_last=False, pin_memory=True)
-    
-    val_loader = torch.utils.data.DataLoader(train_val_dataset, 
-                                            batch_size=batch_size, 
-                                            shuffle=False, num_workers=num_workers, 
-                                            pin_memory=True)
-        # Optional optimizer helpers
-    augmenter = DataAugmenter().to(device) if optimize else None
-    scaler    = GradScaler()              if optimize else None
-    wandb.watch(model, log="all", log_freq=cfg.training.val_every)
-    # Training
-    run(cfg, model, loss_func, acc_func, optimizer,
-        train_loader, val_loader, scheduler,
-        model_inferer=model_inferer,
-        post_sigmoid=post_sigmoid,
-        post_pred=post_pred,
-        max_epochs= max_epochs,
-        val_every=val_every,
-        optimize=optimize,
-        augmenter=augmenter,
-        scaler=scaler,
-        device=device)
-        
+    for epoch in range(start_epoch, cfg.training.max_epochs):
+        # Epoch training
+        t0 = time.time()
+        train_loss = train_epoch(model, train_loader, optimizer, loss_fn, scaler, augmenter, device)
+        t_train = time.time() - t0
+
+        # Scheduler step
+        scheduler.step()
+
+        # Epoch validation
+        v0 = time.time()
+        metrics = validate(model, val_loader, inferer, post_sigmoid, post_pred, acc_fn, device)
+        t_val = time.time() - v0
+
+        tc, wt, et = metrics
+        mean_d = metrics.mean()
+
+        # Guardar mejor modelo
+        if mean_d > best_mean:
+            best_mean = mean_d
+            save_best_model(cfg.training.exp_name, model)
+
+        # Append históricos
+        training_losses.append(train_loss)
+        dices_tc.append(tc)
+        dices_wt.append(wt)
+        dices_et.append(et)
+        dices_mean.append(mean_d)
+        epochs_list.append(epoch)
+
+        # Logging
+        logger.info(
+            f"Epoch {epoch+1}/{cfg.training.max_epochs} — "
+            f"TrainLoss: {train_loss:.4f} ({t_train:.1f}s) — "
+            f"ValDice: {mean_d:.4f} TC:{tc:.4f} WT:{wt:.4f} ET:{et:.4f} ({t_val:.1f}s) — "
+            f"GPUmem: {torch.cuda.max_memory_allocated()/1e9:.2f}G — "
+            f"CPU%: {psutil.cpu_percent()}%"
+        )
+        wandb.log({
+            "train/loss": train_loss,
+            "val/dice_mean": mean_d,
+            "val/dice_tc": tc,
+            "val/dice_wt": wt,
+            "val/dice_et": et,
+            "epoch": epoch,
+        })
+        save_checkpoint(
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            epoch=epoch + 1,
+            best_acc=best_mean,
+            filename="checkpoint.pth",
+            save_dir=ckpt_dir
+        )
+
+    # Guardar CSV
+    save_data(training_losses, dices_et, dices_wt, dices_tc, dices_mean, epochs_list, cfg)
+
+    # Curvas en W&B
+    wandb.log({
+        "Dice_TC_curve": wandb.plot.line_series(xs=epochs_list, ys=[dices_tc],
+                                                 keys=["TC"], title="Dice TC", xname="Epoch"),
+        "Dice_WT_curve": wandb.plot.line_series(xs=epochs_list, ys=[dices_wt],
+                                                 keys=["WT"], title="Dice WT", xname="Epoch"),
+        "Dice_ET_curve": wandb.plot.line_series(xs=epochs_list, ys=[dices_et],
+                                                 keys=["ET"], title="Dice ET", xname="Epoch"),
+        "Dice_mean_curve": wandb.plot.line_series(xs=epochs_list, ys=[dices_mean],
+                                                   keys=["Mean"], title="Mean Dice", xname="Epoch"),
+    })
+
+    wandb.finish()
+
 if __name__ == "__main__":
     main()

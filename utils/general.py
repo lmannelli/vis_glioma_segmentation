@@ -16,60 +16,73 @@ if ROOT not in sys.path:
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 # from config.configs import*
 
-def save_checkpoint(model, epoch, filename="model.pt", best_acc=0, save_dir=os.getcwd()):
-    """save model information and checkpoints in the save dir
-    credit: MONAI
-
-    Parameters
-    ----------
-    model: torch.nn.Module
-    epoch: int
-    filename: str
-    best_acc: int
-    save_dri: str
+def save_checkpoint(model, optimizer, scheduler, epoch, best_acc,
+                    filename="checkpoint.pth", save_dir=os.getcwd()):
     """
-    state_dict = model.state_dict()
-    save_dict = {"epoch": epoch, "best_acc": best_acc, "state_dict": state_dict}
-    filename = os.path.join(save_dir, filename)
-    torch.save(save_dict, filename)
-    print("Saving checkpoint", filename)
+    Guarda un checkpoint con:
+      - state_dict del modelo
+      - state_dict del optimizador
+      - state_dict del scheduler
+      - número de epoch (entrenado)
+      - best_acc hasta ahora
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    state = {
+        "epoch": epoch,
+        "best_acc": best_acc,
+        "state_dict": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+    }
+    path = os.path.join(save_dir, filename)
+    torch.save(state, path)
+    print(f"=> Saved checkpoint: {path}")
 
-def load_pretrained_model(model,
-                        state_path):
-    '''
-    Load a pretraiend model, it is sometimes important to leverage the knowlege 
-    from the pretrained model when the dataset is limited
+def resume_training(model, optimizer, scheduler, state_path, device="cpu"):
+    """
+    Carga del checkpoint:
+      - modelo, optimizador y scheduler
+      - devuelve (start_epoch, best_acc)
+    """
+    checkpoint = torch.load(state_path, map_location=device)
+    model.load_state_dict(checkpoint["state_dict"])
+    optimizer.load_state_dict(checkpoint["optimizer"])
+    scheduler.load_state_dict(checkpoint["scheduler"])
+    start_epoch = checkpoint.get("epoch", 0)
+    best_acc    = checkpoint.get("best_acc", 0.0)
+    print(f"=> Loaded checkpoint '{state_path}' (epoch {start_epoch}, best_acc {best_acc:.4f})")
+    return start_epoch, best_acc
+
+
+def load_pretrained_model(model: nn.Module,
+                          state_path: str,
+                          device: torch.device = torch.device("cpu"),
+                          strict: bool = True) -> nn.Module:
+    """
+    Carga pesos pre-entrenados en un modelo, opcionalmente sin hacer match exacto de
+    nombres de parámetros (strict=False).
 
     Parameters
     ----------
     model: nn.Module
-    state_path: str
-    '''
-    model.load_state_dict(torch.load(state_path, map_location=torch.device('cpu'))["state_dict"])
-    print("Pretrained model loaded")
-    return model
+    state_path: str            Path al .pth o .pt que contiene {"state_dict": ...}
+    device: torch.device       Dispositivo de mapeo (cpu o cuda)
+    strict: bool               Si True, exige coincidencia exacta de keys
 
-def resume_training(model, state_path):
-    '''
-    Option for resuming training where it stopped.
-
-    Parameters
-    ----------
-    model: nn.Module
-    state_path: str
-    '''
-    checkpoint = torch.load(state_path, map_location="cpu")
-    from collections import OrderedDict
-
-    new_state_dict = OrderedDict()
-    for k, v in checkpoint["state_dict"].items():
-        new_state_dict[k.replace("backbone.", "")] = v
-    model.load_state_dict(new_state_dict, strict=False)
-    if "epoch" in checkpoint:
-        start_epoch = checkpoint["epoch"]
-    if "best_acc" in checkpoint:
-        best_acc = checkpoint["best_acc"]
-    print("=> loaded checkpoint '{}' (epoch {}) (bestacc {})".format(state_path, start_epoch, best_acc))
+    Returns
+    -------
+    model: nn.Module           Modelo con pesos cargados
+    """
+    checkpoint = torch.load(state_path, map_location=device)
+    state_dict = checkpoint.get("state_dict", checkpoint)
+    # En algunos casos tu checkpoint podría tener prefijos distintos (p.ej. "module.")
+    # Aquí puedes limpiar prefijos si fuera necesario:
+    new_state = {}
+    for k, v in state_dict.items():
+        name = k.replace("module.", "")  # quita 'module.' si existe
+        new_state[name] = v
+    model.load_state_dict(new_state, strict=strict)
+    print(f"=> Pretrained weights loaded from {state_path} (strict={strict})")
     return model
 
 
