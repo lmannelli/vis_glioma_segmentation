@@ -97,7 +97,7 @@ def train_epoch(model, loader, optimizer, loss_fn, scaler, augmenter, device):
         imgs, lbls = augmenter(imgs, lbls)
 
         optimizer.zero_grad()
-        with autocast():
+        with autocast(device_type='cuda'):
             preds = model(imgs)
             loss = loss_fn(preds, lbls)
         scaler.scale(loss).backward()
