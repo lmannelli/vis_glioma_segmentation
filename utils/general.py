@@ -1,6 +1,7 @@
 """Some helper functions"""
 
 import torch
+import torch.nn as nn
 import monai
 import os
 import numpy as np
