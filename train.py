@@ -234,7 +234,7 @@ def main(cfg: DictConfig):
                               get_not_nans=True)
     inferer = partial(
         sliding_window_inference,
-        roi_size=[240,240,160],
+        roi_size=(128,128,128),
         sw_batch_size=cfg.training.sw_batch_size,
         predictor=model,
         overlap=cfg.model.infer_overlap,
