@@ -89,24 +89,37 @@ def save_data(training_loss, et, wt, tc, mean_dice, epochs, cfg):
 
 # ————————————————————————————————————————————————————————————————
 def train_epoch(model, loader, optimizer, loss_fn, scaler, augmenter, device):
+    """
+    Entrena una época y loguea por batch:
+     - imprime:  step/total_steps, train_loss, step time
+     - wandb.log({"train/loss_batch": loss})
+    """
     model.train()
     meter = AverageMeter()
-    for batch in loader:
+    total_steps = len(loader)
+    for step, batch in enumerate(loader, start=1):
+        t0 = time.time()
         imgs = batch["image"].to(device, non_blocking=True)
         lbls = batch["label"].to(device, non_blocking=True)
         imgs, lbls = augmenter(imgs, lbls)
 
         optimizer.zero_grad()
-        with autocast(device_type='cuda'):
+        with autocast(device_type="cuda"):
             preds = model(imgs)
             loss = loss_fn(preds, lbls)
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
 
-        meter.update(loss.item(), n=imgs.size(0))
-    return meter.avg
+        step_time = time.time() - t0
+        loss_value = loss.item()
+        meter.update(loss_value, n=imgs.size(0))
 
+        # Logging por batch
+        logger.info(f"{step}/{total_steps}, train_loss: {loss_value:.4f}, step time: {step_time:.4f}")
+        wandb.log({"train/loss_batch": loss_value})
+
+    return meter.avg
 @torch.no_grad()
 def validate(model, loader, inferer, post_sigmoid, post_pred, acc_fn, device):
     model.eval()
@@ -308,7 +321,7 @@ def main(cfg: DictConfig):
             "val/dice_tc": tc,
             "val/dice_wt": wt,
             "val/dice_et": et,
-            "epoch": epoch,
+            "epoch": epoch + 1,
         })
         save_checkpoint(
             model=model,
