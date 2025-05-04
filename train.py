@@ -148,7 +148,7 @@ def main(cfg: DictConfig):
         project=cfg.training.project_name,
         name=cfg.training.exp_name,
         config=OmegaConf.to_container(cfg, resolve=True),
-        resume="allow",
+        resume=True,
     )
 
     # Data
