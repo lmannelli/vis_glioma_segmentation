@@ -146,9 +146,10 @@ def main(cfg: DictConfig):
     wandb.login(key=cfg.training.wand_api_key)
     wandb.init(
         project=cfg.training.project_name,
+        id=cfg.training.exp_name,
         name=cfg.training.exp_name,
-        config=OmegaConf.to_container(cfg, resolve=True),
         resume=True,
+        config=OmegaConf.to_container(cfg, resolve=True),
     )
 
     # Data

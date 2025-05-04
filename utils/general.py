@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import nibabel as nib
 from pathlib import Path
 import sys
+import random
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0].parents[0]
@@ -18,40 +19,61 @@ ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 # from config.configs import*
 
 def save_checkpoint(model, optimizer, scheduler, epoch, best_acc,
-                    filename="checkpoint.pth", save_dir=os.getcwd()):
+                    filename: str = "checkpoint.pth", save_dir: str = ".",
+                    scaler=None, rng_state=None):
     """
-    Guarda un checkpoint con:
-      - state_dict del modelo
-      - state_dict del optimizador
-      - state_dict del scheduler
-      - número de epoch (entrenado)
-      - best_acc hasta ahora
+    Guarda el estado completo del entrenamiento, incluyendo:
+      - modelo
+      - optimizador
+      - scheduler
+      - grad scaler (si existe)
+      - estado de RNG de Python, Torch y CUDA (si existe)
+      - época actual
+      - mejor accuracy
     """
-    os.makedirs(save_dir, exist_ok=True)
-    state = {
-        "epoch": epoch,
-        "best_acc": best_acc,
-        "state_dict": model.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "scheduler": scheduler.state_dict(),
+    checkpoint = {
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'epoch': epoch,
+        'best_acc': best_acc,
     }
-    path = os.path.join(save_dir, filename)
-    torch.save(state, path)
-    print(f"=> Saved checkpoint: {path}")
+    if scaler is not None:
+        checkpoint['scaler_state_dict'] = scaler.state_dict()
+    if rng_state is not None:
+        checkpoint['rng_state'] = rng_state
+    path = f"{save_dir}/{filename}"
+    torch.save(checkpoint, path)
 
-def resume_training(model, optimizer, scheduler, state_path, device="cpu"):
+def resume_training(model, optimizer, scheduler, ckpt_path, device, scaler=None):
     """
-    Carga del checkpoint:
-      - modelo, optimizador y scheduler
-      - devuelve (start_epoch, best_acc)
+    Restaura todo el estado guardado en el checkpoint:
+      - modelo
+      - optimizador
+      - scheduler
+      - grad scaler (si existe)
+      - estado de RNG de Python, Torch y CUDA (si existe)
+    Devuelve (start_epoch, best_acc).
     """
-    checkpoint = torch.load(state_path, map_location=device)
-    model.load_state_dict(checkpoint["state_dict"])
-    optimizer.load_state_dict(checkpoint["optimizer"])
-    scheduler.load_state_dict(checkpoint["scheduler"])
-    start_epoch = checkpoint.get("epoch", 0)
-    best_acc    = checkpoint.get("best_acc", 0.0)
-    print(f"=> Loaded checkpoint '{state_path}' (epoch {start_epoch}, best_acc {best_acc:.4f})")
+    # En PyTorch >=2.6, forzar carga completa con weights_only=False
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    model.load_state_dict(ckpt['model_state_dict'])
+    optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+    scheduler.load_state_dict(ckpt['scheduler_state_dict'])
+
+    # Restaurar GradScaler
+    if scaler is not None and 'scaler_state_dict' in ckpt:
+        scaler.load_state_dict(ckpt['scaler_state_dict'])
+
+    # Restaurar estados de RNG
+    if 'rng_state' in ckpt:
+        rstate = ckpt['rng_state']
+        random.setstate(rstate['python'])
+        torch.set_rng_state(rstate['torch'])
+        torch.cuda.set_rng_state_all(rstate['cuda'])
+
+    start_epoch = ckpt['epoch']
+    best_acc    = ckpt['best_acc']
     return start_epoch, best_acc
 
 
