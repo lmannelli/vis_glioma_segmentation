@@ -100,9 +100,18 @@ class BraTS(Dataset):
             ncr_label = 1
             net_label = 4
             et_label = 3 
-            et = patient_label == et_label
-            tc = torch.logical_or(patient_label == ncr_label, et, net_label)
-            wt = torch.logical_or(tc, patient_label == ed_label)
+            # máscaras individuales
+            et  = patient_label == et_label        # Enhancing Tumor
+            ncr = patient_label == ncr_label       # Necrosis
+            net = patient_label == net_label       # Non-Enhancing Tumor
+            ed  = patient_label == ed_label        # Edema
+
+            # Tumor Core = unión de NCR, NET y ET
+            tc  = torch.logical_or(ncr, net)       # NCR ∪ NET
+            tc  = torch.logical_or(tc, et)         # (NCR ∪ NET) ∪ ET
+
+            # Whole Tumor = unión de Tumor Core y Edema
+            wt  = torch.logical_or(tc, ed) 
             patient_label = torch.stack([et, tc, wt])
 
         # Apply padding/cropping
