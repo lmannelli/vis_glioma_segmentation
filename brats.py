@@ -98,9 +98,10 @@ class BraTS(Dataset):
         if self.mode in ["train", "val", "test"]:
             ed_label = 2
             ncr_label = 1
-            et_label = 3 if self.version in ["brats2023", "brats2024"] else 4
+            net_label = 4
+            et_label = 3 
             et = patient_label == et_label
-            tc = torch.logical_or(patient_label == ncr_label, et)
+            tc = torch.logical_or(patient_label == ncr_label, et, net_label)
             wt = torch.logical_or(tc, patient_label == ed_label)
             patient_label = torch.stack([et, tc, wt])
 
