@@ -9,45 +9,36 @@ from monai.transforms.intensity.array import RandGaussianNoise, GaussianSharpen,
 from monai.transforms import RandAffined, RandAxisFlipd
 
 # credit CKD-TransBTS
+from monai.transforms import (
+    Compose, RandZoomd, RandFlipd, RandRotate90d, RandAffined, RandElasticd,
+    RandBiasFieldd, RandGaussianNoised, RandRicianNoised, RandMotionBlurd,
+    RandAdjustContrastd, RandScaleIntensityd, RandShiftIntensityd
+)
+
 class DataAugmenter(nn.Module):
     def __init__(self):
-        super(DataAugmenter,self).__init__()
-        self.flip_dim = []
-        self.zoom_rate = uniform(0.7, 1.0)
-        self.sigma_1 = uniform(0.5, 1.5)
-        self.sigma_2 = uniform(0.5, 1.5)
-        self.image_zoom = Zoom(zoom=self.zoom_rate, mode="trilinear", padding_mode="constant")
-        self.label_zoom = Zoom(zoom=self.zoom_rate, mode="nearest", padding_mode="constant")
-        self.noisy = RandGaussianNoise(prob=1, mean=0, std=uniform(0, 0.33))
-        self.blur = GaussianSharpen(sigma1=self.sigma_1, sigma2=self.sigma_2)
-        self.contrast = AdjustContrast(gamma=uniform(0.65, 1.5))
-    def forward(self, images, lables):
-        with torch.no_grad():
-            for b in range(images.shape[0]):
-                image = images[b].squeeze(0)
-                lable = lables[b].squeeze(0)
-                if random() < 0.15:
-                    image = self.image_zoom(image)
-                    lable = self.label_zoom(lable)
-                if random() < 0.5:
-                    image = torch.flip(image, dims=(1,))
-                    lable = torch.flip(lable, dims=(1,))
-                if random() < 0.5:
-                    image = torch.flip(image, dims=(2,))
-                    lable = torch.flip(lable, dims=(2,))
-                if random() < 0.5:
-                    image = torch.flip(image, dims=(3,))
-                    lable = torch.flip(lable, dims=(3,))
-                if random() < 0.15:
-                    image = self.noisy(image)
-                if random() < 0.15:
-                    image = self.blur(image)
-                if random() < 0.15:
-                    image = self.contrast(image)
-                images[b] = image.unsqueeze(0)
-                lables[b] = lable.unsqueeze(0)
-            return images, lables
-        
+        super().__init__()
+        self.augmentations = Compose([
+            
+            RandFlipd(keys=["image","label"], prob=0.5, spatial_axis=[0,1,2]),
+            RandRotate90d(keys=["image","label"], prob=0.5, max_k=3),
+            RandAffined(keys=["image","label"], prob=0.3, rotate_range=(0.1,0.1,0.1),
+                        translate_range=(10,10,10), scale_range=(0.1,0.1,0.1), mode=["trilinear","nearest"]),
+            RandElasticd(keys=["image","label"], prob=0.3, sigma_range=(5,7), magnitude_range=(100,200)),
+            RandBiasFieldd(keys=["image"], prob=0.3, coeff_range=(0.1,0.5)),
+            RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=(0.0,0.05)),
+            RandRicianNoised(keys=["image"], prob=0.2, mean=0.0, std=(0.0,0.05)),
+            RandMotionBlurd(keys=["image"], prob=0.2, kernel_size=(3,3,3)),
+            RandAdjustContrastd(keys=["image"], prob=0.2, gamma=(0.7,1.5)),
+            RandScaleIntensityd(keys=["image"], prob=0.2, factors=(0.9,1.1)),
+            RandShiftIntensityd(keys=["image"], prob=0.2, offsets=(-0.1,0.1)),
+        ])
+
+    def forward(self, images, labels):
+        d = {"image": images, "label": labels}
+        augmented = self.augmentations(d)
+        return augmented["image"], augmented["label"]
+
 class AttnUnetAugmentation(nn.Module):
     def __init__(self):
       super(AttnUnetAugmentation, self).__init__()

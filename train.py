@@ -118,7 +118,6 @@ def train_epoch(model, loader, optimizer, loss_fn, scaler, augmenter, device):
         # Logging por batch
         logger.info(f"{step}/{total_steps}, train_loss: {loss_value:.4f}, step time: {step_time:.4f}")
         wandb.log({"train/loss_batch": loss_value})
-
     return meter.avg
 @torch.no_grad()
 def validate(model, loader, inferer, post_sigmoid, post_pred, acc_fn, device):
