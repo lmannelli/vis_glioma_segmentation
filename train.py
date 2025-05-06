@@ -15,7 +15,7 @@ from utils.general import save_checkpoint, load_pretrained_model, resume_trainin
 import hydra
 from brats import get_datasets
 from omegaconf import OmegaConf, DictConfig
-from monai.data import decollate_batch, DataLoader
+from monai.data import decollate_batch, DataLoader, Dataset
 import torch
 import torch.nn as nn
 from torch.backends import cudnn
@@ -42,6 +42,16 @@ except ModuleNotFoundError:
 from functools import partial
 from utils.augment import DataAugmenter
 from utils.schedulers import SegResNetScheduler, PolyDecayScheduler
+
+from monai.transforms.intensity.array import RandGaussianNoise, GaussianSharpen, AdjustContrast
+from monai.transforms import RandAffined, RandAxisFlipd
+
+# credit CKD-TransBTS
+from monai.transforms import (
+    Compose, RandFlipd, RandRotate90d, RandAffined, NormalizeIntensityd,
+    Orientationd, RandBiasFieldd, RandGaussianNoised, RandRicianNoised, 
+    RandAdjustContrastd, RandScaleIntensityd, RandShiftIntensityd, Spacingd
+)
 
 # Configure logger
 import logging
@@ -88,7 +98,7 @@ def save_data(training_loss, et, wt, tc, mean_dice, epochs, cfg):
     return df
 
 # ————————————————————————————————————————————————————————————————
-def train_epoch(model, loader, optimizer, loss_fn, scaler, augmenter, device):
+def train_epoch(model, loader, optimizer, loss_fn, scaler, device):
     """
     Entrena una época y loguea por batch:
      - imprime:  step/total_steps, train_loss, step time
@@ -101,7 +111,7 @@ def train_epoch(model, loader, optimizer, loss_fn, scaler, augmenter, device):
         t0 = time.time()
         imgs = batch["image"].to(device, non_blocking=True)
         lbls = batch["label"].to(device, non_blocking=True)
-        imgs, lbls = augmenter(imgs, lbls)
+        # imgs, lbls = augmenter(imgs, lbls)
 
         optimizer.zero_grad()
         with autocast(device_type="cuda"):
@@ -150,10 +160,49 @@ def main(cfg: DictConfig):
         resume=True,
         config=OmegaConf.to_container(cfg, resolve=True),
     )
+    # 1) MONAI transforms
+    train_transforms = Compose([
+        Orientationd(keys=["image", "label"], axcodes="RAS"),
+        Spacingd(
+            keys=["image", "label"],
+            pixdim=(1.0, 1.0, 1.0),
+            mode=("bilinear", "nearest"),
+        ),
+        NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+        RandFlipd(keys=["image","label"], prob=0.5, spatial_axis=[0,1,2]),
+        RandRotate90d(keys=["image","label"], prob=0.5, max_k=3),
+        RandAffined(
+            keys=["image","label"], prob=0.3,
+            rotate_range=(0.1,0.1,0.1),
+            translate_range=(10,10,10),
+            scale_range=(0.1,0.1,0.1),
+            mode=["trilinear","nearest"]
+        ),
+        RandBiasFieldd(keys=["image"], prob=0.3, coeff_range=(0.1,0.5)),
+        RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=(0.0,0.05)),
+        RandRicianNoised(keys=["image"], prob=0.2, mean=0.0, std=(0.0,0.05)),
+        RandAdjustContrastd(keys=["image"], prob=0.2, gamma=(0.7,1.5)),
+        RandScaleIntensityd(keys=["image"], prob=0.2, factors=(0.9,1.1)),
+        RandShiftIntensityd(keys=["image"], prob=0.2, offsets=(-0.1,0.1)),
+    ])
+    val_transforms = Compose([
+        Orientationd(keys=["image", "label"], axcodes="RAS"),
+        Spacingd(
+            keys=["image", "label"],
+            pixdim=(1.0, 1.0, 1.0),
+            mode=("bilinear", "nearest"),
+        ),
+        NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+    ])
 
-    # Data
-    train_ds = get_datasets(cfg.dataset.dataset_folder, "train", target_size=(128,128,128))
-    val_ds   = get_datasets(cfg.dataset.dataset_folder, "val",   target_size=(128,128,128))
+    # 2) Crear datasets con transforms
+    train_data = get_datasets(cfg.dataset.dataset_folder, "train", target_size=(128,128,128))
+    val_data   = get_datasets(cfg.dataset.dataset_folder, "val",   target_size=(128,128,128))
+
+    train_ds = Dataset(data=train_data, transform=train_transforms)
+    val_ds   = Dataset(data=val_data,   transform=val_transforms)
+
+    # 3) DataLoaders
     train_loader = DataLoader(
         train_ds,
         batch_size=cfg.training.batch_size,
@@ -256,7 +305,7 @@ def main(cfg: DictConfig):
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=cfg.training.max_epochs)
     scaler = GradScaler()
-    augmenter = DataAugmenter().to(device)
+    # augmenter = DataAugmenter().to(device)
 
     # Históricos
     training_losses, dices_tc, dices_wt, dices_et, dices_mean, epochs_list = [], [], [], [], [], []
@@ -280,7 +329,7 @@ def main(cfg: DictConfig):
     for epoch in range(start_epoch, cfg.training.max_epochs):
         # Epoch training
         t0 = time.time()
-        train_loss = train_epoch(model, train_loader, optimizer, loss_fn, scaler, augmenter, device)
+        train_loss = train_epoch(model, train_loader, optimizer, loss_fn, scaler, device)
         t_train = time.time() - t0
 
         # Scheduler step
