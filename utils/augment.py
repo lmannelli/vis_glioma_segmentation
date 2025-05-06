@@ -10,25 +10,30 @@ from monai.transforms import RandAffined, RandAxisFlipd
 
 # credit CKD-TransBTS
 from monai.transforms import (
-    Compose, RandZoomd, RandFlipd, RandRotate90d, RandAffined, Rand3DElastic,
-    RandBiasFieldd, RandGaussianNoised, RandRicianNoised, RandMotionBlurd,
-    RandAdjustContrastd, RandScaleIntensityd, RandShiftIntensityd
+    Compose, RandFlipd, RandRotate90d, RandAffined,
+    RandBiasFieldd, RandGaussianNoised, RandRicianNoised,
+    RandMotionBlurd, RandAdjustContrastd,
+    RandScaleIntensityd, RandShiftIntensityd,
 )
 
 class DataAugmenter(nn.Module):
     def __init__(self):
         super().__init__()
         self.augmentations = Compose([
-            
             RandFlipd(keys=["image","label"], prob=0.5, spatial_axis=[0,1,2]),
             RandRotate90d(keys=["image","label"], prob=0.5, max_k=3),
-            RandAffined(keys=["image","label"], prob=0.3, rotate_range=(0.1,0.1,0.1),
-                        translate_range=(10,10,10), scale_range=(0.1,0.1,0.1), mode=["trilinear","nearest"]),
-            Rand3DElastic(keys=["image","label"], prob=0.3, sigma_range=(5,7), magnitude_range=(100,200)),
+            RandAffined(keys=["image","label"], prob=0.3,
+                        rotate_range=(0.1,0.1,0.1), translate_range=(10,10,10),
+                        scale_range=(0.1,0.1,0.1),
+                        mode=["trilinear","nearest"]),
+            RandMotionBlurd(keys=["image","label"], prob=0.2,
+                            kernel_size=(3,3,3),
+                            sigma_range=(0.1,2.0),
+                            rotate_range=(0.0,0.0,0.0),
+                            padding_mode="border"),
             RandBiasFieldd(keys=["image"], prob=0.3, coeff_range=(0.1,0.5)),
             RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=(0.0,0.05)),
             RandRicianNoised(keys=["image"], prob=0.2, mean=0.0, std=(0.0,0.05)),
-            RandMotionBlurd(keys=["image"], prob=0.2, kernel_size=(3,3,3)),
             RandAdjustContrastd(keys=["image"], prob=0.2, gamma=(0.7,1.5)),
             RandScaleIntensityd(keys=["image"], prob=0.2, factors=(0.9,1.1)),
             RandShiftIntensityd(keys=["image"], prob=0.2, offsets=(-0.1,0.1)),
