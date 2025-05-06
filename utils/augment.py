@@ -10,7 +10,7 @@ from monai.transforms import RandAffined, RandAxisFlipd
 
 # credit CKD-TransBTS
 from monai.transforms import (
-    Compose, RandZoomd, RandFlipd, RandRotate90d, RandAffined, RandElasticd,
+    Compose, RandZoomd, RandFlipd, RandRotate90d, RandAffined, Rand3DElastic,
     RandBiasFieldd, RandGaussianNoised, RandRicianNoised, RandMotionBlurd,
     RandAdjustContrastd, RandScaleIntensityd, RandShiftIntensityd
 )
@@ -24,7 +24,7 @@ class DataAugmenter(nn.Module):
             RandRotate90d(keys=["image","label"], prob=0.5, max_k=3),
             RandAffined(keys=["image","label"], prob=0.3, rotate_range=(0.1,0.1,0.1),
                         translate_range=(10,10,10), scale_range=(0.1,0.1,0.1), mode=["trilinear","nearest"]),
-            RandElasticd(keys=["image","label"], prob=0.3, sigma_range=(5,7), magnitude_range=(100,200)),
+            Rand3DElastic(keys=["image","label"], prob=0.3, sigma_range=(5,7), magnitude_range=(100,200)),
             RandBiasFieldd(keys=["image"], prob=0.3, coeff_range=(0.1,0.5)),
             RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=(0.0,0.05)),
             RandRicianNoised(keys=["image"], prob=0.2, mean=0.0, std=(0.0,0.05)),
