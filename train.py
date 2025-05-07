@@ -101,12 +101,16 @@ def train_epoch(model, loader, optimizer, loss_fn, scaler, augmenter, device):
         t0 = time.time()
         imgs = batch["image"].to(device, non_blocking=True)
         lbls = batch["label"].to(device, non_blocking=True)
-        imgs, lbls = augmenter(imgs, lbls)
 
+        # Crea el diccionario de datos para el augmenter
+        data = {"image": imgs, "label": lbls}
+        data_augmented = augmenter(data)
+        imgs_augmented = data_augmented["image"]
+        lbls_augmented = data_augmented["label"]
         optimizer.zero_grad()
         with autocast(device_type="cuda"):
-            preds = model(imgs)
-            loss = loss_fn(preds, lbls)
+            preds = model(imgs_augmented)
+            loss = loss_fn(preds, lbls_augmented)
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
