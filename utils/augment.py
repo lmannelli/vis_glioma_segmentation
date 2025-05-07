@@ -24,7 +24,6 @@ class DataAugmenter(nn.Module):
             RandRotate90d(keys=["image","label"], prob=0.5, max_k=3),
             RandAffined(keys=["image","label"], prob=0.3, rotate_range=(0.1,0.1,0.1),
                         translate_range=(10,10,10), scale_range=(0.1,0.1,0.1), mode=["trilinear","nearest"]),
-            RandBiasFieldd(keys=["image"], prob=0.3, coeff_range=(0.1,0.5)),
             RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=(0.0,0.05)),
             RandRicianNoised(keys=["image"], prob=0.2, mean=0.0, std=(0.0,0.05)),
             RandAdjustContrastd(keys=["image"], prob=0.2, gamma=(0.7,1.5)),
