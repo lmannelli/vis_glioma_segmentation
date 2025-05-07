@@ -251,12 +251,6 @@ def main(cfg: DictConfig):
                                                      std = np.random.uniform(0, 0.45)),
                                   RandGibbsNoised(keys = "image", 
                                                  prob = 0.5),
-                                  EnsureTyped(keys = "image",
-                                              device = device, 
-                                              dtype = np.float32),
-                                  EnsureTyped(keys = "label", 
-                                              device = device, 
-                                              dtype = np.int8)
                                 ]
     val_data_transform_func_list = [
                                   EnsureTyped(keys = "label", 
