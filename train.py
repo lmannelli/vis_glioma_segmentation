@@ -13,7 +13,7 @@ import psutil
 from utils.meter import AverageMeter
 from utils.general import save_checkpoint, load_pretrained_model, resume_training
 import hydra
-from brats import get_datasets
+from brats import CustomDataset, ConvertToMultiChannelBratsLabelsd
 from omegaconf import OmegaConf, DictConfig
 from monai.data import decollate_batch, DataLoader
 import torch
@@ -31,21 +31,20 @@ from monai.transforms import (
 )
 from monai.transforms import (
     Compose,
-    RandZoomd,
-    RandFlipd,
     LoadImaged,
     EnsureChannelFirstd,
     EnsureTyped,
-    RandGaussianNoised,
-    Lambdad,
-    RandAdjustContrastd,
-    RandScaleIntensityd,
-    NormalizeIntensityd,
     Orientationd,
     Spacingd,
-    RandStdShiftIntensityd,
+    RandSpatialCropd,
+    NormalizeIntensityd,
+    RandFlipd,
+    RandZoomd,
     RandGaussianSharpend,
-    RandGibbsNoised
+    RandGaussianNoised,
+    RandGibbsNoised,
+    apply_transform,
+    MapTransform,
 )
 from monai.networks.nets import SwinUNETR, SegResNet, VNet, AttentionUnet, UNETR
 from networks.models.ResUNetpp.model import ResUnetPlusPlus
@@ -215,74 +214,77 @@ def main(cfg: DictConfig):
         resume=True,
         config=OmegaConf.to_container(cfg, resolve=True),
     )
-    train_data_transform_func_list = [
-                                  EnsureTyped(keys = "label", 
-                                              dtype = np.int8),
-                                  Lambdad(keys = "label", 
-                                          func = extract_tumor_labels_from_seg_masks),
-                                  Spacingd(keys = ["image", "label"], 
-                                           pixdim = (1.0, 1.0, 1.0), 
-                                           mode = ("area", "area")),
-                                  Orientationd(keys = ["image", "label"], 
-                                               axcodes = "RAS"),
-                                  RandAdjustContrastd(keys = "image", prob=0.1, gamma=(0.5, 4.5)),
-                                  NormalizeIntensityd(keys = ["image"],
-                                                      nonzero = True, 
-                                                      channel_wise = True),
-                                  # HistogramNormalized(keys = "image"),
-                                  RandScaleIntensityd(keys = ["image"], 
-                                                      factors = (0, 10),
-                                                      prob = 0.3),
-                                  RandStdShiftIntensityd(keys = "image", 
-                                                         factors = 0.1,
-                                                         nonzero = True,
-                                                         channel_wise = True,
-                                                         prob = 0.7),
-                                  RandFlipd(keys = ["image", "label"], 
-                                            prob = 0.7, 
-                                            spatial_axis = (0, 1)),
-                                  RandZoomd(keys = ["image", "label"], 
-                                            prob = 0.8),
-                                  RandGaussianSharpend(keys = "image", 
-                                                       prob = 0.3),
-                                  RandGaussianNoised(keys = "image", 
-                                                     prob = 0.8, 
-                                                     mean = 0, 
-                                                     std = np.random.uniform(0, 0.45)),
-                                  RandGibbsNoised(keys = "image", 
-                                                 prob = 0.5),
-                                ]
-    val_data_transform_func_list = [
-                                  EnsureTyped(keys = "label", 
-                                              dtype = np.int8),
-                                  Lambdad(keys = "label", 
-                                          func = extract_tumor_labels_from_seg_masks),
-                                  Spacingd(keys = ["image", "label"], 
-                                           pixdim = (1.0, 1.0, 1.0), 
-                                           mode = ("area", "area")),
-                                  Orientationd(keys = ["image", "label"], 
-                                               axcodes = "RAS"),
-                                  
-                                ]
+   
+    # --------------------------------------------------------------------------------
+    # 2) Pipeline de transformaciones para entrenamiento y validación
+    # --------------------------------------------------------------------------------
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # Data
-    train_transform = Compose(train_data_transform_func_list)
-    val_transform   = Compose(val_data_transform_func_list)  # sin augmentaciones
+    t_transform = Compose([
+        # Leemos de disco y ponemos canales primero
+        LoadImaged(keys=["image", "label"]),
+        EnsureChannelFirstd(keys="image"),
+        EnsureTyped(keys=["image", "label"]),
 
-    train_ds = get_datasets(
-        dataset_folder = cfg.dataset.dataset_folder,
-        mode           = "train",
-        target_size    = (128,128,128),
-        version        = "brats2024",
-        transform      = train_transform,
+        # Convertimos la máscara a 3 canales booleanos
+        ConvertToMultiChannelBratsLabelsd(keys="label"),
+
+        # Alineamiento espacio / orientación
+        Orientationd(keys=["image", "label"], axcodes="RAS"),
+        Spacingd(
+            keys=["image", "label"],
+            pixdim=(1.0, 1.0, 1.0),
+            mode=("bilinear", "nearest")
+        ),
+
+        # Crop aleatorio espacial fijo (ejemplo)
+        RandSpatialCropd(
+            keys=["image", "label"],
+            roi_size=(224, 224, 144),
+            random_size=False
+        ),
+
+        # Normalización de intensidad y augmentation
+        NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+        RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
+        RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
+        RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
+        RandZoomd(keys=["image", "label"], prob=0.8),
+        RandGaussianSharpend(keys="image", prob=0.3),
+        RandGaussianNoised(keys="image", prob=0.8),
+        RandGibbsNoised(keys="image", prob=0.5),
+
+        # Finalmente tipado en CPU; el .to(device) lo harás en el loop
+        EnsureTyped(keys="image", dtype=np.float32),
+        EnsureTyped(keys="label", dtype=np.float32),
+    ])
+
+    v_transform = Compose([
+        LoadImaged(keys=["image", "label"]),
+        EnsureChannelFirstd(keys="image"),
+        EnsureTyped(keys=["image", "label"]),
+        ConvertToMultiChannelBratsLabelsd(keys="label"),
+        Orientationd(keys=["image", "label"], axcodes="RAS"),
+        Spacingd(
+            keys=["image", "label"],
+            pixdim=(1.0, 1.0, 1.0),
+            mode=("bilinear", "nearest")
+        ),
+        NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+        EnsureTyped(keys="image", dtype=np.float32),
+        EnsureTyped(keys="label", dtype=np.float32),
+    ])
+    train_ds = CustomDataset(
+        root_dir=cfg.dataset.dataset_folder,
+        section="train",
+        transform=t_transform
     )
-    val_ds   = get_datasets(
-        dataset_folder = cfg.dataset.dataset_folder,
-        mode           = "val",
-        target_size    = (128,128,128),
-        version        = "brats2024",
-        transform      = val_transform,
+    val_ds = CustomDataset(
+        root_dir=cfg.dataset.dataset_folder,
+        section="val",
+        transform=v_transform
     )
+
     train_loader = DataLoader(
         train_ds,
         batch_size=cfg.training.batch_size,

@@ -14,102 +14,110 @@ from utils.all_utils import (
     pad_image_and_label, listdir, get_brats_folder
 )
 import numpy as np
-class BraTS(Dataset):
-    def __init__(self, patients_dir, patient_ids, mode,
-                 target_size=(128,128,128), version="brats2023",
-                 transform=None):                        # <-- añadir aquí
-        super().__init__()
-        self.patients_dir = patients_dir
-        self.patients_ids = patient_ids
-        self.mode         = mode
-        self.target_size  = target_size
-        self.version      = version
-        self.transform    = transform  
-        self.datas = []
-        # Define modality suffixes for each version
-        if version in ["brats2023", "brats2024"]:
-            modality_suffixes = {
-                "t1": "-t1n",
-                "t1ce": "-t1c",
-                "t2": "-t2w",
-                "flair": "-t2f"
-            }
-        elif version in ["brats2019", "brats2020"]:
-            modality_suffixes = {
-                "t1": "_t1",
-                "t1ce": "_t1ce",
-                "t2": "_t2",
-                "flair": "_flair"
-            }
-        else:
-            raise ValueError(f"Unsupported version: {version}")
+from monai.transforms import (
+    apply_transform,
+    MapTransform,
+)
+from monai.inferers import sliding_window_inference
+# --------------------------------------------------------------------------------
+# 1) Primero definimos el transform que convierte la etiqueta en 3 canales:
+# --------------------------------------------------------------------------------
+class ConvertToMultiChannelBratsLabelsd(MapTransform):
+    """
+    Convierte las etiquetas BRATS en 3 canales binarios:
+      - canal 0: Enhancing Tumor (ET, label == 3)
+      - canal 1: Tumor Core (TC = NCR ∪ NET ∪ ET; labels 1,4,3)
+      - canal 2: Whole Tumor (WT = TC ∪ ED; labels 1,4,3,2)
+    """
+    def __call__(self, data):
+        d = dict(data)
+        for key in self.keys:
+            lbl = d[key]
+            # máscaras elementales
+            et  = lbl == 3
+            ncr = lbl == 1
+            net = lbl == 4
+            ed  = lbl == 2
 
-        self.modalities = list(modality_suffixes.keys())
+            # Tumor Core = NCR ∪ NET ∪ ET
+            tc = torch.logical_or(ncr, net)
+            tc = torch.logical_or(tc, et)
 
-        for patient_id in patient_ids:
-            # Create file paths for each modality
-            image_paths = {
-                modality: f"{patient_id}{suffix}.nii.gz" if version == "brats2023" else f"{patient_id}{suffix}.nii.gz"
-                for modality, suffix in modality_suffixes.items()
-            }
+            # Whole Tumor = TC ∪ ED
+            wt = torch.logical_or(tc, ed)
 
-            if mode in ["train", "val", "test", "visualize"]:
-                seg_filename = f"{patient_id}.nii.gz" if version == "brats2023" else f"{patient_id}-seg.nii.gz"
-            else:
-                seg_filename = None
+            # stack en orden [ET, TC, WT]
+            d[key] = torch.stack([et, tc, wt], dim=0).float()
+        return d
 
-            patient = dict(id=patient_id, **image_paths, seg=seg_filename)
-            self.datas.append(patient)
 
-    def __getitem__(self, idx):
-        patient = self.datas[idx]
-        # Cargo volúmenes en numpy con load_nii (shape D×H×W)…
-        imgs = {mod: load_nii(os.path.join(self.patients_dir, "images", patient["id"], patient[mod]))
-                for mod in self.modalities}
 
-        # cargo máscara si aplica…
-        if self.mode in ["train","val","test","visualize"]:
-            seg = load_nii(os.path.join(self.patients_dir, "masks", patient["seg"])).astype("int8")
-        else:
-            seg = None
+# --------------------------------------------------------------------------------
+# 3) Un Dataset de ejemplo usando MONAI Dataset
+# --------------------------------------------------------------------------------
+class CustomDataset(Dataset):
+    def __init__(self, root_dir, section="train", transform=None):
+        """
+        root_dir/
+         ├ train/
+         │   ├ images/
+         │   │  ├ <patient_id>/
+         │   │  │   ├ <patient_id>-t1n.nii.gz
+         │   │  │   ├ <patient_id>-t1c.nii.gz
+         │   │  │   ├ <patient_id>-t2w.nii.gz
+         │   │  │   └ <patient_id>-t2f.nii.gz
+         │   └ masks/
+         │       └ <patient_id>.seg.nii.gz
+         └ val/...
+        """
+        self.transform  = transform
+        self.section    = section
+        base            = os.path.join(root_dir, section)
+        images_base     = os.path.join(base, "images")
+        masks_base      = os.path.join(base, "masks")
 
-        # construyo diccionario para MONAI
-        data = {
-            "image": np.stack([imgs[mod] for mod in self.modalities], axis=0),  # C×D×H×W
-            "label": seg                                           #   D×H×W
-        }
+        # Listado de pacientes: solo carpetas
+        self.patient_ids = [
+            d for d in sorted(os.listdir(images_base))
+            if os.path.isdir(os.path.join(images_base, d))
+        ]
 
-        # aplico transform si está definido
-        if self.transform:
-            data = self.transform(data)
+        # Construyo listas paralelas de paths
+        self.image_files = []
+        self.label_files = []
+        for pid in self.patient_ids:
+            folder = os.path.join(images_base, pid)
+            # cuatro modalidades en el orden que quieras
+            modalities = [
+                f"{pid}-t1n.nii.gz",
+                f"{pid}-t1c.nii.gz",
+                f"{pid}-t2w.nii.gz",
+                f"{pid}-t2f.nii.gz",
+            ]
+            img_paths = [os.path.join(folder, fn) for fn in modalities]
+            seg_path  = os.path.join(masks_base, f"{pid}.seg.nii.gz")
 
-        # convierto a torch.Tensor
-        image = torch.as_tensor(data["image"], dtype=torch.float32)
-        label = torch.as_tensor(data["label"], dtype=torch.int8) if data.get("label") is not None else None
+            # sanity check
+            if not all(os.path.exists(p) for p in img_paths):
+                missing = [p for p in img_paths if not os.path.exists(p)]
+                raise FileNotFoundError(f"Faltan imágenes para {pid}: {missing}")
+            if not os.path.exists(seg_path):
+                raise FileNotFoundError(f"No encontré la máscara para {pid}: {seg_path}")
 
-        return {
-            "patient_id": patient["id"],
-            "image": image,
-            "label": label
-        }
+            self.image_files.append(img_paths)
+            self.label_files.append(seg_path)
 
     def __len__(self):
-        return len(self.datas)
+        return len(self.patient_ids)
 
+    def __getitem__(self, idx):
+        # Preparo el dict para MONAI
+        data = {
+            "image": self.image_files[idx],  # rutas, MONAI LoadImaged leerá
+            "label": self.label_files[idx],
+        }
+        # Aplico transform MONAI
+        if self.transform:
+            data = apply_transform(self.transform, data)
+        return data
 
-def get_datasets(dataset_folder, mode, target_size=(128, 128, 128), version="brats2024", transform = None):
-    dataset_folder = get_brats_folder(dataset_folder, mode, version=version)
-    assert os.path.exists(dataset_folder), f"Dataset Folder Does Not Exist: {dataset_folder}"
-    # Obtener los IDs de los pacientes desde el directorio images/
-    images_dir  = os.path.join(dataset_folder, "images")
-    patient_ids = [d for d in os.listdir(images_dir)
-                   if os.path.isdir(os.path.join(images_dir, d))]
-
-    return BraTS(
-        patients_dir = dataset_folder,
-        patient_ids   = patient_ids,
-        mode          = mode,
-        target_size   = target_size,
-        version       = version,
-        transform     = transform
-    )
