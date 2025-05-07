@@ -132,7 +132,7 @@ def train_epoch(model, loader, optimizer, loss_fn, scaler, device):
         meter.update(loss_value, n=imgs.size(0))
 
         # Logging por batch
-        logger.info(f"{step}/{total_steps}, train_loss: {loss_value:.4f}, step time: {step_time:.4f}")
+        # logger.info(f"{step}/{total_steps}, train_loss: {loss_value:.4f}, step time: {step_time:.4f}")
         wandb.log({"train/loss_batch": loss_value})
     return meter.avg
 @torch.no_grad()
