@@ -85,7 +85,7 @@ class BraTS(Dataset):
 
         # convierto a torch.Tensor
         image = torch.as_tensor(data["image"], dtype=torch.float32)
-        label = torch.as_tensor(data["seg_mask"], dtype=torch.int8) if data.get("label") is not None else None
+        label = torch.as_tensor(data["label"], dtype=torch.int8) if data.get("label") is not None else None
 
         return {
             "patient_id": patient["id"],
