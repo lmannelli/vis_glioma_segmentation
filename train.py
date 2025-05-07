@@ -256,7 +256,7 @@ def main(cfg: DictConfig):
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=cfg.training.max_epochs)
     scaler = GradScaler()
-    augmenter = DataAugmenter().to(device)
+    augmenter = DataAugmenter(prob=0.5).to(device)
 
     # Históricos
     training_losses, dices_tc, dices_wt, dices_et, dices_mean, epochs_list = [], [], [], [], [], []
