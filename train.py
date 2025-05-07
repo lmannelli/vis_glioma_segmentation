@@ -215,8 +215,7 @@ def main(cfg: DictConfig):
         resume=True,
         config=OmegaConf.to_container(cfg, resolve=True),
     )
-    train_data_transform_func_list = [LoadImaged(keys = ["image", "label"]),
-                                  EnsureChannelFirstd(keys = ["image"]),
+    train_data_transform_func_list = [
                                   EnsureTyped(keys = "label", 
                                               dtype = np.int8),
                                   Lambdad(keys = "label", 
@@ -259,8 +258,7 @@ def main(cfg: DictConfig):
                                               device = device, 
                                               dtype = np.int8)
                                 ]
-    val_data_transform_func_list = [LoadImaged(keys = ["image", "label"]),
-                                  EnsureChannelFirstd(keys = ["image"]),
+    val_data_transform_func_list = [
                                   EnsureTyped(keys = "label", 
                                               dtype = np.int8),
                                   Lambdad(keys = "label", 
