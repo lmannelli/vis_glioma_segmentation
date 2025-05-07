@@ -10,21 +10,20 @@ from monai.transforms import RandAffined, RandAxisFlipd
 
 # credit CKD-TransBTS
 from monai.transforms import (
-    Compose, RandFlipd, RandRotate90d, RandAffined,
-    RandBiasFieldd, RandGaussianNoised, RandRicianNoised, RandAdjustContrastd,
-    RandScaleIntensityd, RandShiftIntensityd,
+    Compose, RandZoomd, RandFlipd, RandRotate90d, RandAffined, RandElasticd,
+    RandBiasFieldd, RandGaussianNoised, RandRicianNoised, RandMotionBlurd,
+    RandAdjustContrastd, RandScaleIntensityd, RandShiftIntensityd, NormalizeIntensityd
 )
 
 class DataAugmenter(nn.Module):
     def __init__(self):
         super().__init__()
         self.augmentations = Compose([
+            NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
             RandFlipd(keys=["image","label"], prob=0.5, spatial_axis=[0,1,2]),
             RandRotate90d(keys=["image","label"], prob=0.5, max_k=3),
-            RandAffined(keys=["image","label"], prob=0.3,
-                        rotate_range=(0.1,0.1,0.1), translate_range=(10,10,10),
-                        scale_range=(0.1,0.1,0.1),
-                        mode=["trilinear","nearest"]),
+            RandAffined(keys=["image","label"], prob=0.3, rotate_range=(0.1,0.1,0.1),
+                        translate_range=(10,10,10), scale_range=(0.1,0.1,0.1), mode=["trilinear","nearest"]),
             RandBiasFieldd(keys=["image"], prob=0.3, coeff_range=(0.1,0.5)),
             RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=(0.0,0.05)),
             RandRicianNoised(keys=["image"], prob=0.2, mean=0.0, std=(0.0,0.05)),
