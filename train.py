@@ -13,7 +13,7 @@ import psutil
 from utils.meter import AverageMeter
 from utils.general import save_checkpoint, load_pretrained_model, resume_training
 import hydra
-from brats import BraTS
+from brats import get_datasets
 from omegaconf import OmegaConf, DictConfig
 from monai.data import decollate_batch, DataLoader
 import torch
@@ -277,19 +277,19 @@ def main(cfg: DictConfig):
     train_transform = Compose(train_data_transform_func_list)
     val_transform   = Compose(val_data_transform_func_list)  # sin augmentaciones
 
-    train_ds = BraTS(
-        patients_dir=cfg.dataset.dataset_folder,
-        patient_ids=os.listdir(os.path.join(cfg.dataset.dataset_folder, "train")),
-        mode="train",
-        version="brats2024",
-        transform=train_transform
+    train_ds = get_datasets(
+        dataset_folder = cfg.dataset.dataset_folder,
+        mode           = "train",
+        target_size    = (128,128,128),
+        version        = "brats2024",
+        transform      = train_transform,
     )
-    val_ds = BraTS(
-        patients_dir=cfg.dataset.dataset_folder,
-        patient_ids=os.listdir(os.path.join(cfg.dataset.dataset_folder, "val")),
-        mode="val",
-        version="brats2024",
-        transform=val_transform
+    val_ds   = get_datasets(
+        dataset_folder = cfg.dataset.dataset_folder,
+        mode           = "val",
+        target_size    = (128,128,128),
+        version        = "brats2024",
+        transform      = val_transform,
     )
     train_loader = DataLoader(
         train_ds,

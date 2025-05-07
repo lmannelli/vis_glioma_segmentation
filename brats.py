@@ -97,10 +97,19 @@ class BraTS(Dataset):
         return len(self.datas)
 
 
-def get_datasets(dataset_folder, mode, target_size=(128, 128, 128), version="brats2024"):
+def get_datasets(dataset_folder, mode, target_size=(128, 128, 128), version="brats2024", transform = None):
     dataset_folder = get_brats_folder(dataset_folder, mode, version=version)
     assert os.path.exists(dataset_folder), f"Dataset Folder Does Not Exist: {dataset_folder}"
     # Obtener los IDs de los pacientes desde el directorio images/
-    images_dir = os.path.join(dataset_folder, "images")
-    patients_ids = [x for x in listdir(images_dir)]  # Lista de subdirectorios en images/
-    return BraTS(dataset_folder, patients_ids, mode, target_size=target_size, version=version)
+    images_dir  = os.path.join(dataset_folder, "images")
+    patient_ids = [d for d in os.listdir(images_dir)
+                   if os.path.isdir(os.path.join(images_dir, d))]
+
+    return BraTS(
+        patients_dir = dataset_folder,
+        patient_ids   = patient_ids,
+        mode          = mode,
+        target_size   = target_size,
+        version       = version,
+        transform     = transform
+    )
