@@ -37,6 +37,7 @@ from monai.transforms import (
     Orientationd,
     Spacingd,
     RandSpatialCropd,
+    SpatialPadd,
     NormalizeIntensityd,
     RandFlipd,
     RandZoomd,
@@ -237,8 +238,19 @@ def main(cfg: DictConfig):
             mode=("bilinear", "nearest")
         ),
 
-
-        # Normalización de intensidad y augmentation
+        # crop fijo al tamaño de la inferencia
+        RandSpatialCropd(
+            keys=["image","label"],
+            roi_size=(128,128,128),
+            random_size=False
+        ),
+        # por si el spacing/orientación no deja EXACTAMENTE 128³
+        SpatialPadd(
+            keys=["image","label"],
+            spatial_size=[128,128,128],
+            mode='constant'
+        ),
+            # Normalización de intensidad y augmentation
         NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
         RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
         RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
