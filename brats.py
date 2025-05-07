@@ -15,14 +15,16 @@ from utils.all_utils import (
 )
 import numpy as np
 class BraTS(Dataset):
-    def __init__(self, patients_dir, patient_ids, mode, target_size=(128, 128, 128), version="brats2023"):
+    def __init__(self, patients_dir, patient_ids, mode,
+                 target_size=(128,128,128), version="brats2023",
+                 transform=None):                        # <-- añadir aquí
         super().__init__()
         self.patients_dir = patients_dir
         self.patients_ids = patient_ids
-        self.mode = mode
-        self.target_size = target_size
-        self.version = version
-        self.datas = []
+        self.mode         = mode
+        self.target_size  = target_size
+        self.version      = version
+        self.transform    = transform  
 
         # Define modality suffixes for each version
         if version in ["brats2023", "brats2024"]:
@@ -74,7 +76,7 @@ class BraTS(Dataset):
         # construyo diccionario para MONAI
         data = {
             "image": np.stack([imgs[mod] for mod in self.modalities], axis=0),  # C×D×H×W
-            "seg_mask": seg                                           #   D×H×W
+            "label": seg                                           #   D×H×W
         }
 
         # aplico transform si está definido
@@ -83,7 +85,7 @@ class BraTS(Dataset):
 
         # convierto a torch.Tensor
         image = torch.as_tensor(data["image"], dtype=torch.float32)
-        label = torch.as_tensor(data["seg_mask"], dtype=torch.int8) if data.get("seg_mask") is not None else None
+        label = torch.as_tensor(data["seg_mask"], dtype=torch.int8) if data.get("label") is not None else None
 
         return {
             "patient_id": patient["id"],

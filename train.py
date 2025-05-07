@@ -279,14 +279,14 @@ def main(cfg: DictConfig):
 
     train_ds = BraTS(
         patients_dir=cfg.dataset.dataset_folder,
-        patient_ids=os.listdir(os.path.join(cfg.dataset.dataset_folder, "images")),
+        patient_ids=os.listdir(os.path.join(cfg.dataset.dataset_folder, "train")),
         mode="train",
         version="brats2024",
         transform=train_transform
     )
     val_ds = BraTS(
         patients_dir=cfg.dataset.dataset_folder,
-        patient_ids=os.listdir(os.path.join(cfg.dataset.dataset_folder, "images")),
+        patient_ids=os.listdir(os.path.join(cfg.dataset.dataset_folder, "val")),
         mode="val",
         version="brats2024",
         transform=val_transform
