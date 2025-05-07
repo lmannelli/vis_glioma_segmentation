@@ -10,8 +10,8 @@ from monai.transforms import RandAffined, RandAxisFlipd
 
 # credit CKD-TransBTS
 from monai.transforms import (
-    Compose, RandZoomd, RandFlipd, RandRotate90d, RandAffined, RandElasticd,
-    RandBiasFieldd, RandGaussianNoised, RandRicianNoised, RandMotionBlurd,
+    Compose, RandZoomd, RandFlipd, RandRotate90d, RandAffined,
+    RandBiasFieldd, RandGaussianNoised, RandRicianNoised,
     RandAdjustContrastd, RandScaleIntensityd, RandShiftIntensityd, NormalizeIntensityd
 )
 
