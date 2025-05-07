@@ -13,7 +13,7 @@ import psutil
 from utils.meter import AverageMeter
 from utils.general import save_checkpoint, load_pretrained_model, resume_training
 import hydra
-from brats import get_datasets
+from brats import BraTS
 from omegaconf import OmegaConf, DictConfig
 from monai.data import decollate_batch, DataLoader
 import torch
@@ -28,6 +28,24 @@ from monai.inferers import sliding_window_inference
 from monai.transforms import (
     AsDiscrete,
     Activations,
+)
+from monai.transforms import (
+    Compose,
+    RandZoomd,
+    RandFlipd,
+    LoadImaged,
+    EnsureChannelFirstd,
+    EnsureTyped,
+    RandGaussianNoised,
+    Lambdad,
+    RandAdjustContrastd,
+    RandScaleIntensityd,
+    NormalizeIntensityd,
+    Orientationd,
+    Spacingd,
+    RandStdShiftIntensityd,
+    RandGaussianSharpend,
+    RandGibbsNoised
 )
 from monai.networks.nets import SwinUNETR, SegResNet, VNet, AttentionUnet, UNETR
 from networks.models.ResUNetpp.model import ResUnetPlusPlus
@@ -88,7 +106,7 @@ def save_data(training_loss, et, wt, tc, mean_dice, epochs, cfg):
     return df
 
 # ————————————————————————————————————————————————————————————————
-def train_epoch(model, loader, optimizer, loss_fn, scaler, augmenter, device):
+def train_epoch(model, loader, optimizer, loss_fn, scaler, device):
     """
     Entrena una época y loguea por batch:
      - imprime:  step/total_steps, train_loss, step time
@@ -101,16 +119,10 @@ def train_epoch(model, loader, optimizer, loss_fn, scaler, augmenter, device):
         t0 = time.time()
         imgs = batch["image"].to(device, non_blocking=True)
         lbls = batch["label"].to(device, non_blocking=True)
-
-        # Crea el diccionario de datos para el augmenter
-        data = {"image": imgs, "label": lbls}
-        data_augmented = augmenter(data)
-        imgs_augmented = data_augmented["image"]
-        lbls_augmented = data_augmented["label"]
         optimizer.zero_grad()
         with autocast(device_type="cuda"):
-            preds = model(imgs_augmented)
-            loss = loss_fn(preds, lbls_augmented)
+            preds = model(imgs)
+            loss = loss_fn(preds, lbls)
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
@@ -139,6 +151,55 @@ def validate(model, loader, inferer, post_sigmoid, post_pred, acc_fn, device):
     metrics, _ = acc_fn.aggregate()
     return metrics.cpu().numpy()  # array [TC, WT, ET]
 
+def extract_tumor_labels_from_seg_masks(image):
+    """
+    Transforma una máscara de segmentación con etiquetas:
+      - 1: Necrosis (NCR)
+      - 2: Edema (ED)
+      - 3: Enhancing Tumor (ET)
+      - 4: Non-Enhancing Tumor (NET)
+    en un tensor o array con tres canales binarios:
+      0: ET (Enhancing Tumor)
+      1: TC (Tumor Core = NCR ∪ NET ∪ ET)
+      2: WT (Whole Tumor = TC ∪ ED)
+    """
+    # Definición de IDs según tu convención
+    ncr_label = 1  # Necrosis
+    ed_label  = 2  # Edema
+    et_label  = 3  # Enhancing Tumor
+    net_label = 4  # Non-Enhancing Tumor
+
+    # Soportar tanto torch.Tensor como np.ndarray
+    is_tensor = isinstance(image, torch.Tensor)
+    if is_tensor:
+        img = image.cpu().numpy()
+    else:
+        img = image.copy()
+
+    # Si viene con canal extra de 1
+    if img.ndim == 4 and img.shape[0] == 1:
+        img = img.squeeze(0)
+
+    # Crear máscaras binarias de cada componente
+    et  = (img == et_label)
+    ncr = (img == ncr_label)
+    net = (img == net_label)
+    ed  = (img == ed_label)
+
+    # Tumor Core = NCR ∪ NET ∪ ET
+    tc = np.logical_or(ncr, net)
+    tc = np.logical_or(tc, et)
+
+    # Whole Tumor = TC ∪ ED
+    wt = np.logical_or(tc, ed)
+
+    # Stack en orden [ET, TC, WT]
+    seg_masks = np.stack([et, tc, wt]).astype(np.uint8)
+
+    if is_tensor:
+        return torch.from_numpy(seg_masks)
+    else:
+        return seg_masks
 # ————————————————————————————————————————————————————————————————
 @hydra.main(config_path="conf", config_name="configs", version_base=None)
 def main(cfg: DictConfig):
@@ -154,10 +215,82 @@ def main(cfg: DictConfig):
         resume=True,
         config=OmegaConf.to_container(cfg, resolve=True),
     )
+    train_data_transform_func_list = [LoadImaged(keys = ["image", "label"]),
+                                  EnsureChannelFirstd(keys = ["image"]),
+                                  EnsureTyped(keys = "label", 
+                                              dtype = np.int8),
+                                  Lambdad(keys = "label", 
+                                          func = extract_tumor_labels_from_seg_masks),
+                                  Spacingd(keys = ["image", "label"], 
+                                           pixdim = (1.0, 1.0, 1.0), 
+                                           mode = ("area", "area")),
+                                  Orientationd(keys = ["image", "label"], 
+                                               axcodes = "RAS"),
+                                  RandAdjustContrastd(keys = "image", prob=0.1, gamma=(0.5, 4.5)),
+                                  NormalizeIntensityd(keys = ["image"],
+                                                      nonzero = True, 
+                                                      channel_wise = True),
+                                  # HistogramNormalized(keys = "image"),
+                                  RandScaleIntensityd(keys = ["image"], 
+                                                      factors = (0, 10),
+                                                      prob = 0.3),
+                                  RandStdShiftIntensityd(keys = "image", 
+                                                         factors = 0.1,
+                                                         nonzero = True,
+                                                         channel_wise = True,
+                                                         prob = 0.7),
+                                  RandFlipd(keys = ["image", "label"], 
+                                            prob = 0.7, 
+                                            spatial_axis = (0, 1)),
+                                  RandZoomd(keys = ["image", "label"], 
+                                            prob = 0.8),
+                                  RandGaussianSharpend(keys = "image", 
+                                                       prob = 0.3),
+                                  RandGaussianNoised(keys = "image", 
+                                                     prob = 0.8, 
+                                                     mean = 0, 
+                                                     std = np.random.uniform(0, 0.45)),
+                                  RandGibbsNoised(keys = "image", 
+                                                 prob = 0.5),
+                                  EnsureTyped(keys = "image",
+                                              device = device, 
+                                              dtype = np.float32),
+                                  EnsureTyped(keys = "label", 
+                                              device = device, 
+                                              dtype = np.int8)
+                                ]
+    val_data_transform_func_list = [LoadImaged(keys = ["image", "label"]),
+                                  EnsureChannelFirstd(keys = ["image"]),
+                                  EnsureTyped(keys = "label", 
+                                              dtype = np.int8),
+                                  Lambdad(keys = "label", 
+                                          func = extract_tumor_labels_from_seg_masks),
+                                  Spacingd(keys = ["image", "label"], 
+                                           pixdim = (1.0, 1.0, 1.0), 
+                                           mode = ("area", "area")),
+                                  Orientationd(keys = ["image", "label"], 
+                                               axcodes = "RAS"),
+                                  
+                                ]
 
     # Data
-    train_ds = get_datasets(cfg.dataset.dataset_folder, "train", target_size=(128,128,128))
-    val_ds   = get_datasets(cfg.dataset.dataset_folder, "val",   target_size=(128,128,128))
+    train_transform = Compose(train_data_transform_func_list)
+    val_transform   = Compose(val_data_transform_func_list)  # sin augmentaciones
+
+    train_ds = BraTS(
+        patients_dir=cfg.dataset.dataset_folder,
+        patient_ids=os.listdir(os.path.join(cfg.dataset.dataset_folder, "images")),
+        mode="train",
+        version="brats2024",
+        transform=train_transform
+    )
+    val_ds = BraTS(
+        patients_dir=cfg.dataset.dataset_folder,
+        patient_ids=os.listdir(os.path.join(cfg.dataset.dataset_folder, "images")),
+        mode="val",
+        version="brats2024",
+        transform=val_transform
+    )
     train_loader = DataLoader(
         train_ds,
         batch_size=cfg.training.batch_size,
@@ -260,7 +393,7 @@ def main(cfg: DictConfig):
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=cfg.training.max_epochs)
     scaler = GradScaler()
-    augmenter = DataAugmenter(prob=0.5).to(device)
+    #augmenter = DataAugmenter(prob=0.5).to(device)
 
     # Históricos
     training_losses, dices_tc, dices_wt, dices_et, dices_mean, epochs_list = [], [], [], [], [], []
@@ -284,7 +417,7 @@ def main(cfg: DictConfig):
     for epoch in range(start_epoch, cfg.training.max_epochs):
         # Epoch training
         t0 = time.time()
-        train_loss = train_epoch(model, train_loader, optimizer, loss_fn, scaler, augmenter, device)
+        train_loss = train_epoch(model, train_loader, optimizer, loss_fn, scaler, device)
         t_train = time.time() - t0
 
         # Scheduler step

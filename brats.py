@@ -13,7 +13,7 @@ from utils.all_utils import (
     pad_or_crop_image, minmax, load_nii,
     pad_image_and_label, listdir, get_brats_folder
 )
-
+import numpy as np
 class BraTS(Dataset):
     def __init__(self, patients_dir, patient_ids, mode, target_size=(128, 128, 128), version="brats2023"):
         super().__init__()
@@ -61,80 +61,34 @@ class BraTS(Dataset):
 
     def __getitem__(self, idx):
         patient = self.datas[idx]
-        crop_list = []
-        pad_list = []
+        # Cargo volúmenes en numpy con load_nii (shape D×H×W)…
+        imgs = {mod: load_nii(os.path.join(self.patients_dir, "images", patient["id"], patient[mod]))
+                for mod in self.modalities}
 
-        # Cargar imágenes para todas las modalidades (corregir la ruta)
-        patient_image = {
-            modality: torch.tensor(load_nii(
-                os.path.join(  # Incluir el ID del paciente en la ruta
-                    self.patients_dir, "images", patient["id"], patient[modality]
-                )
-            ))
-            for modality in self.modalities
+        # cargo máscara si aplica…
+        if self.mode in ["train","val","test","visualize"]:
+            seg = load_nii(os.path.join(self.patients_dir, "masks", patient["seg"])).astype("int8")
+        else:
+            seg = None
+
+        # construyo diccionario para MONAI
+        data = {
+            "image": np.stack([imgs[mod] for mod in self.modalities], axis=0),  # C×D×H×W
+            "seg_mask": seg                                           #   D×H×W
         }
 
-        # Load segmentation if available
-        if self.mode in ["train", "val", "test", "visualize"]:
-            patient_label = torch.tensor(
-                load_nii(os.path.join(self.patients_dir, "masks", patient["seg"])).astype("int8")
-            )
-        else:
-            patient_label = torch.zeros_like(next(iter(patient_image.values())), dtype=torch.int8)
+        # aplico transform si está definido
+        if self.transform:
+            data = self.transform(data)
 
-        # Stack channels into single tensor
-        patient_image = torch.stack([minmax(patient_image[mod]) for mod in self.modalities])
-
-        # Crop black borders
-        nonzero_index = torch.nonzero(torch.sum(patient_image, dim=0) != 0)
-        z_indexes, y_indexes, x_indexes = nonzero_index[:, 0], nonzero_index[:, 1], nonzero_index[:, 2]
-        zmin, ymin, xmin = [max(0, int(torch.min(idxs) - 1)) for idxs in (z_indexes, y_indexes, x_indexes)]
-        zmax, ymax, xmax = [int(torch.max(idxs) + 1) for idxs in (z_indexes, y_indexes, x_indexes)]
-
-        patient_image = patient_image[:, zmin:zmax, ymin:ymax, xmin:xmax].float()
-        patient_label = patient_label[zmin:zmax, ymin:ymax, xmin:xmax]
-
-        # One-hot style conversion to 3 channels: ET, TC, WT
-        if self.mode in ["train", "val", "test"]:
-            ed_label = 2
-            ncr_label = 1
-            net_label = 4
-            et_label = 3 
-            # máscaras individuales
-            et  = patient_label == et_label        # Enhancing Tumor
-            ncr = patient_label == ncr_label       # Necrosis
-            net = patient_label == net_label       # Non-Enhancing Tumor
-            ed  = patient_label == ed_label        # Edema
-
-            # Tumor Core = unión de NCR, NET y ET
-            tc  = torch.logical_or(ncr, net)       # NCR ∪ NET
-            tc  = torch.logical_or(tc, et)         # (NCR ∪ NET) ∪ ET
-
-            # Whole Tumor = unión de Tumor Core y Edema
-            wt  = torch.logical_or(tc, ed) 
-            patient_label = torch.stack([et, tc, wt])
-
-        # Apply padding/cropping
-        if self.mode in ["train", "val", "test"]:
-            patient_image, patient_label, pad_list, crop_list = pad_or_crop_image(
-                patient_image, patient_label, target_size=self.target_size
-            )
-        elif self.mode == "test_pad":
-            d, h, w = patient_image.shape[1:]
-            pad_d = max(0, 128 - d)
-            pad_h = max(0, 128 - h)
-            pad_w = max(0, 128 - w)
-            patient_image, patient_label, pad_list = pad_image_and_label(
-                patient_image, patient_label, target_size=(d + pad_d, h + pad_h, w + pad_w)
-            )
+        # convierto a torch.Tensor
+        image = torch.as_tensor(data["image"], dtype=torch.float32)
+        label = torch.as_tensor(data["seg_mask"], dtype=torch.int8) if data.get("seg_mask") is not None else None
 
         return {
             "patient_id": patient["id"],
-            "image": patient_image.to(dtype=torch.float32),
-            "label": patient_label.to(dtype=torch.float32),
-            "nonzero_indexes": ((zmin, zmax), (ymin, ymax), (xmin, xmax)),
-            "box_slice": crop_list,
-            "pad_list": pad_list
+            "image": image,
+            "label": label
         }
 
     def __len__(self):
