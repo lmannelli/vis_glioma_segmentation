@@ -1,4 +1,4 @@
-batch_size: 6
+batch_size: 1
 num_workers: 1
 infer_overlap: 0.5
 learning_rate: 0.0001
