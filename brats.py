@@ -111,7 +111,6 @@ class CustomDataset(Dataset):
         return len(self.patient_ids)
 
     def __getitem__(self, idx):
-        data = self.data[idx]
         data = {
             "image": self.image_files[idx],  # rutas, MONAI LoadImaged leerá
             "label": self.label_files[idx],
