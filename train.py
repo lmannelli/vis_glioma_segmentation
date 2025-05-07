@@ -162,13 +162,10 @@ def main(cfg: DictConfig):
     )
     # 1) MONAI transforms
     train_transforms = Compose([
-        Orientationd(keys=["image", "label"], axcodes="RAS"),
-        Spacingd(
-            keys=["image", "label"],
-            pixdim=(1.0, 1.0, 1.0),
-            mode=("bilinear", "nearest"),
-        ),
+        Orientationd(keys=["image","label"], axcodes="RAS"),
+        Spacingd(keys=["image","label"], pixdim=(1,1,1), mode=("bilinear","nearest")),
         NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
+
         RandFlipd(keys=["image","label"], prob=0.5, spatial_axis=[0,1,2]),
         RandRotate90d(keys=["image","label"], prob=0.5, max_k=3),
         RandAffined(
@@ -178,24 +175,22 @@ def main(cfg: DictConfig):
             scale_range=(0.1,0.1,0.1),
             mode=["trilinear","nearest"]
         ),
+
         RandBiasFieldd(keys=["image"], prob=0.3, coeff_range=(0.1,0.5)),
-        RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=(0.0,0.05)),
-        RandRicianNoised(keys=["image"], prob=0.2, mean=0.0, std=(0.0,0.05)),
+        RandGaussianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.05),
+        RandRicianNoised(keys=["image"], prob=0.2, mean=0.0, std=0.05),
+
         RandAdjustContrastd(keys=["image"], prob=0.2, gamma=(0.7,1.5)),
         RandScaleIntensityd(keys=["image"], prob=0.2, factors=(0.9,1.1)),
         RandShiftIntensityd(keys=["image"], prob=0.2, offsets=(-0.1,0.1)),
     ])
     val_transforms = Compose([
-        Orientationd(keys=["image", "label"], axcodes="RAS"),
-        Spacingd(
-            keys=["image", "label"],
-            pixdim=(1.0, 1.0, 1.0),
-            mode=("bilinear", "nearest"),
-        ),
+        Orientationd(keys=["image","label"], axcodes="RAS"),
+        Spacingd(keys=["image","label"], pixdim=(1,1,1), mode=("bilinear","nearest")),
         NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
     ])
 
-    # 2) Crear datasets con transforms
+    # 2) Datasets con transforms
     train_data = get_datasets(cfg.dataset.dataset_folder, "train", target_size=(128,128,128))
     val_data   = get_datasets(cfg.dataset.dataset_folder, "val",   target_size=(128,128,128))
 
@@ -204,24 +199,15 @@ def main(cfg: DictConfig):
 
     # 3) DataLoaders
     train_loader = DataLoader(
-        train_ds,
-        batch_size=cfg.training.batch_size,
-        shuffle=True,
-        num_workers=cfg.training.num_workers,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=2,
+        train_ds, batch_size=cfg.training.batch_size, shuffle=True,
+        num_workers=cfg.training.num_workers, pin_memory=True,
+        persistent_workers=True, prefetch_factor=2,
     )
     val_loader = DataLoader(
-        val_ds,
-        batch_size=cfg.training.batch_size,
-        shuffle=False,
-        num_workers=cfg.training.num_workers,
-        pin_memory=True,
-        persistent_workers=True,
-        prefetch_factor=2,
+        val_ds, batch_size=cfg.training.batch_size, shuffle=False,
+        num_workers=cfg.training.num_workers, pin_memory=True,
+        persistent_workers=True, prefetch_factor=2,
     )
-
     # Model
     arch = cfg.model.architecture
     if arch == "segres_net":
