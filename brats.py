@@ -111,13 +111,17 @@ class CustomDataset(Dataset):
         return len(self.patient_ids)
 
     def __getitem__(self, idx):
-        # Preparo el dict para MONAI
+        data = self.data[idx]
         data = {
             "image": self.image_files[idx],  # rutas, MONAI LoadImaged leerá
             "label": self.label_files[idx],
         }
-        # Aplico transform MONAI
-        if self.transform:
-            data = apply_transform(self.transform, data)
-        return data
+        try:
+            if self.transform:
+                data = apply_transform(self.transform, data)
+                return data
+        except Exception as e:
+            print(f"[ERROR] Falló el archivo: {data}")
+            raise e
+
 
