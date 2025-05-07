@@ -25,7 +25,7 @@ class BraTS(Dataset):
         self.target_size  = target_size
         self.version      = version
         self.transform    = transform  
-
+        self.datas = []
         # Define modality suffixes for each version
         if version in ["brats2023", "brats2024"]:
             modality_suffixes = {
