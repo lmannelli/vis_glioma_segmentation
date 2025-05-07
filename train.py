@@ -237,12 +237,6 @@ def main(cfg: DictConfig):
             mode=("bilinear", "nearest")
         ),
 
-        # Crop aleatorio espacial fijo (ejemplo)
-        RandSpatialCropd(
-            keys=["image", "label"],
-            roi_size=(224, 224, 144),
-            random_size=False
-        ),
 
         # Normalización de intensidad y augmentation
         NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
