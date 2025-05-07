@@ -95,7 +95,7 @@ class CustomDataset(Dataset):
                 f"{pid}-t2f.nii.gz",
             ]
             img_paths = [os.path.join(folder, fn) for fn in modalities]
-            seg_path  = os.path.join(masks_base, f"{pid}.seg.nii.gz")
+            seg_path  = os.path.join(masks_base, f"{pid}-seg.nii.gz")
 
             # sanity check
             if not all(os.path.exists(p) for p in img_paths):
