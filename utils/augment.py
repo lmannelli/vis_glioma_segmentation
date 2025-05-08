@@ -27,36 +27,36 @@ import torch.nn as nn
 class DataAugmenter(nn.Module):
     def __init__(self, roi_size=(128, 128, 128)):
         super().__init__()
-        self.roi_size = roi_size  # (Z, Y, X)
+        self.roi_size = roi_size
 
         self.transforms = Compose([
             NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
             RandAffined(keys=["image", "label"], prob=0.5,
-                       rotate_range=(0.26, 0.26, 0.26),
-                       translate_range=(0.1, 0.1, 0.1),
-                       scale_range=(0.1, 0.1, 0.1),
-                       padding_mode='border',
-                       mode=('bilinear', 'nearest')),
+                        rotate_range=(0.26,)*3,
+                        translate_range=(0.1,)*3,
+                        scale_range=(0.1,)*3,
+                        padding_mode='border',
+                        mode=('bilinear', 'nearest')),
             Rand3DElasticd(keys=["image", "label"], prob=0.3,
-                          sigma_range=(10, 20), magnitude_range=(0.2, 0.4),
-                          padding_mode='border',
-                          mode=('bilinear', 'nearest')),
+                           sigma_range=(10, 20), magnitude_range=(0.2, 0.4),
+                           padding_mode='border',
+                           mode=('bilinear', 'nearest')),
             RandZoomd(keys=["image", "label"], prob=0.3,
-                     min_zoom=0.7, max_zoom=1.4,
-                     padding_mode='constant', keep_size=True,
-                     mode=('bilinear', 'nearest')),
+                      min_zoom=0.7, max_zoom=1.4,
+                      padding_mode='constant', keep_size=True,
+                      mode=('bilinear', 'nearest')),
             RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
             RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
             RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
             RandBiasFieldd(keys="image", prob=0.3, degree=3, coeff_range=(0.3, 0.7)),
-            RandGaussianNoised(keys="image", prob=0.3, std=(0, 0.15)),
+            # Aquí usamos el transform correcto para rangos:
+            RandGaussianNoised(keys="image", prob=0.3, mean=0.0, std=(0.0, 0.15)),
             RandGaussianSmoothd(keys="image", prob=0.3,
                                 sigma_x=(0.5, 1.5),
                                 sigma_y=(0.5, 1.5),
                                 sigma_z=(0.5, 1.5)),
             RandAdjustContrastd(keys="image", prob=0.3, gamma=(0.7, 1.5)),
         ])
-
     def forward(self, images, labels):
         """
         images: Tensor[B, C_img, Z, Y, X]
