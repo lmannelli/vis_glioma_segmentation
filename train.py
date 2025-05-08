@@ -300,7 +300,7 @@ def main(cfg: DictConfig):
         shuffle=True,
         num_workers=cfg.training.num_workers,
         pin_memory=True,
-        persistent_workers=False,
+        persistent_workers=True,
         prefetch_factor=2,
     )
     val_loader = DataLoader(
