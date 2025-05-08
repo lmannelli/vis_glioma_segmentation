@@ -19,6 +19,7 @@ from monai.data import decollate_batch, DataLoader
 import torch
 import torch.nn as nn
 from torch.backends import cudnn
+from torch.utils.data import Subset
 from torch.amp import autocast, GradScaler
 from monai.metrics import DiceMetric, HausdorffDistanceMetric
 from monai.utils.enums import MetricReduction
@@ -262,7 +263,7 @@ def main(cfg: DictConfig):
 
         # Finalmente tipado en CPU; el .to(device) lo harás en el loop
         EnsureTyped(keys="image", dtype=np.float32),
-        EnsureTyped(keys="label", dtype=np.float32),
+        EnsureTyped(keys="label", dtype=np.int8),
     ])
 
     v_transform = Compose([
@@ -278,7 +279,7 @@ def main(cfg: DictConfig):
         ),
         NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
         EnsureTyped(keys="image", dtype=np.float32),
-        EnsureTyped(keys="label", dtype=np.float32),
+        EnsureTyped(keys="label", dtype=np.int8),
     ])
     train_ds = CustomDataset(
         root_dir=cfg.dataset.dataset_folder,
@@ -290,6 +291,13 @@ def main(cfg: DictConfig):
         section="val",
         transform=v_transform
     )
+    if cfg.training.debug :
+        n = min(cfg.training.debug_train_samples, len(train_ds))
+        logger.info(f"[DEBUG] Submuestreo de train_ds a {n} muestras")
+        train_ds = Subset(train_ds, list(range(n)))
+        m = min(cfg.training.debug_val_samples, len(val_ds))
+        logger.info(f"[DEBUG] Submuestreo de val_ds a {m} muestras")
+        val_ds = Subset(val_ds, list(range(m)))
 
     train_loader = DataLoader(
         train_ds,
