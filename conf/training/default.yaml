@@ -22,5 +22,5 @@ debug_val_samples: 10
 Optimize: True
 new_max_epochs: None
 project_name: "Visionary Neuro GLI"
-exp_name: "SegResNet_Run_Without_Data_Aug_v1.1.9"
+exp_name: "SegResNet_Run_Without_Data_Aug_v1.1.91"
 wand_api_key: 981af7fdfb60c59545a06fcba96db2a57079cdf9
