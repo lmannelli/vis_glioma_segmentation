@@ -118,7 +118,7 @@ def train_epoch(model, loader, optimizer, loss_fn, scaler, device):
         lbls = batch["label"].to(device, non_blocking=True)
 
         optimizer.zero_grad()
-        with autocast():
+        with autocast(device_type = device):
             preds = model(imgs)
             loss = loss_fn(preds, lbls)
         scaler.scale(loss).backward()
