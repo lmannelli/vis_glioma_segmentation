@@ -16,7 +16,7 @@ colab: False
 irl: True
 sines: False
 my_pc: False
-debug: False
+debug: True
 debug_train_samples: 10
 debug_val_samples: 10
 Optimize: True
