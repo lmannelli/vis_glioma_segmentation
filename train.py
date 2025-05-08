@@ -123,7 +123,7 @@ def train_epoch(model, loader, optimizer, loss_fn, scaler, device):
 
         # 2) Tiempo de copia a GPU
         t_to_start = time.time()
-        imgs = imgs_raw.to(device, non_blocking=True).to(memory_format=torch.channels_last)
+        imgs = imgs_raw.to(device, non_blocking=True).contiguous(memory_format=torch.channels_last)
         lbls = lbls_raw.to(device, non_blocking=True)
         t_to = time.time() - t_to_start
 
@@ -164,7 +164,7 @@ def validate(model, loader, inferer, post_sigmoid, post_pred, acc_fn, device):
     model.eval()
     all_preds, all_lbls = [], []
     for batch in loader:
-        imgs = batch["image"].to(device, non_blocking=True).to(memory_format=torch.channels_last)
+        imgs = batch["image"].to(device, non_blocking=True).contiguous(memory_format=torch.channels_last)
         lbls = decollate_batch(batch["label"].to(device))
         logits = inferer(imgs)
         all_preds.extend(decollate_batch(logits))
@@ -324,7 +324,6 @@ def main(cfg: DictConfig):
         raise ValueError(f"Unknown arch {arch}")
     
     model = model.to(device)
-    model = model.to(memory_format=torch.channels_last)
     model = torch.compile(model)
     
     if cfg.training.pretrained:
