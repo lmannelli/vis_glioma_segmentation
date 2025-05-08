@@ -309,7 +309,7 @@ def main(cfg: DictConfig):
         shuffle=False,
         num_workers=cfg.training.num_workers,
         pin_memory=True,
-        persistent_workers=False,cfg.training.num_workers
+        persistent_workers=False,
         prefetch_factor=2,
     )
 
