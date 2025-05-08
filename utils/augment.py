@@ -17,7 +17,6 @@ from monai.transforms import (
     RandFlip,
     Rand3DElastic,
     RandBiasFieldd,
-    RandSpatialCropdd,
     RandGaussianNoised,
     RandGaussianSmoothd,
     RandAdjustContrastd,
