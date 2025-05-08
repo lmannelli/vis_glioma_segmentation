@@ -111,71 +111,40 @@ def save_data(training_loss, et, wt, tc, mean_dice, epochs, cfg):
 def train_epoch(model, loader, optimizer, loss_fn, scaler, device):
     model.train()
     meter = AverageMeter()
-    total_steps = len(loader)
-    for step, batch in enumerate(loader, start=1):
-        t0 = time.time()
-
-        # 1) Tiempo de DataLoader + transform (antes de .to())
-        t_load_start = time.time()
-        imgs_raw = batch["image"]
-        lbls_raw = batch["label"]
-        t_load = time.time() - t_load_start
-
-        # 2) Tiempo de copia a GPU
-        t_to_start = time.time()
-        imgs = imgs_raw.to(device, non_blocking=True) \
-             .contiguous(memory_format=torch.channels_last_3d)
-        lbls = lbls_raw.to(device, non_blocking=True)
-        t_to = time.time() - t_to_start
+    total = len(loader)
+    for step, batch in enumerate(loader, 1):
+        start = time.time()
+        imgs = batch["image"].to(device, non_blocking=True)
+        lbls = batch["label"].to(device, non_blocking=True)
 
         optimizer.zero_grad()
-
-        # 3) Tiempo de forward + cálculo de loss
-        t_fwd_start = time.time()
-        with autocast(device_type="cuda"):
+        with autocast():
             preds = model(imgs)
             loss = loss_fn(preds, lbls)
-        t_fwd = time.time() - t_fwd_start
-
-        # 4) Tiempo de backward + step
-        t_bwd_start = time.time()
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
-        t_bwd = time.time() - t_bwd_start
 
-        # 5) Logging y acumulado
-        step_time = time.time() - t0
-        loss_value = loss.item()
-        meter.update(loss_value, n=imgs.size(0))
-
-        logger.info(
-            f"[Step {step}/{total_steps}] "
-            f"load: {t_load:.3f}s  to_gpu: {t_to:.3f}s  "
-            f"forward: {t_fwd:.3f}s  backward: {t_bwd:.3f}s  "
-            f"total: {step_time:.3f}s  loss: {loss_value:.4f}"
-        )
-        wandb.log({"train/loss_batch": loss_value}, commit=False)
-
-    # commit all wandb logs of this epoch
+        meter.update(loss.item(), n=imgs.size(0))
+        if step % 10 == 0:
+            logger.info(f"Step {step}/{total}, loss: {loss.item():.4f}, time: {time.time()-start:.3f}s")
+            wandb.log({"train/loss_batch": loss.item()}, commit=False)
     wandb.log({}, commit=True)
     return meter.avg
+
 @torch.no_grad()
 def validate(model, loader, inferer, post_sigmoid, post_pred, acc_fn, device):
-    model.eval()
-    all_preds, all_lbls = [], []
+    model.eval(); all_preds, all_lbls = [], []
     for batch in loader:
-        imgs = batch["image"].to(device, non_blocking=True) \
-             .contiguous(memory_format=torch.channels_last_3d)
-        lbls = decollate_batch(batch["label"].to(device))
+        imgs = batch["image"].to(device, non_blocking=True)
+        labels = decollate_batch(batch["label"].to(device))
         logits = inferer(imgs)
         all_preds.extend(decollate_batch(logits))
-        all_lbls.extend(lbls)
+        all_lbls.extend(labels)
     processed = [post_pred(post_sigmoid(x)) for x in all_preds]
-    acc_fn.reset()
-    acc_fn(y_pred=processed, y=all_lbls)
+    acc_fn.reset(); acc_fn(y_pred=processed, y=all_lbls)
     metrics, _ = acc_fn.aggregate()
-    return metrics.cpu().numpy()  # array [TC, WT, ET]
+    return metrics.cpu().numpy()
 
 # ————————————————————————————————————————————————————————————————
 @hydra.main(config_path="conf", config_name="configs", version_base=None)
@@ -196,7 +165,6 @@ def main(cfg: DictConfig):
     # --------------------------------------------------------------------------------
     # 2) Pipeline de transformaciones para entrenamiento y validación
     # --------------------------------------------------------------------------------
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     t_transform = Compose([
         # Leemos de disco y ponemos canales primero
