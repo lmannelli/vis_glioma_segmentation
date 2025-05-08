@@ -11,7 +11,7 @@ from monai.transforms import RandAffined, RandAxisFlipd
 # credit CKD-TransBTS
 from monai.transforms import (
     Compose,
-    NormalizeIntensityd,
+    NormalizeIntensity,
     RandAffine,
     RandZoom,
     RandFlip,
@@ -30,7 +30,7 @@ class DataAugmenter(nn.Module):
         self.roi_size = roi_size  # (Z, Y, X)
         # Transform: normalizar intensidades (imagen)
         self.basic_transforms = Compose([
-            NormalizeIntensityd(nonzero=True, channel_wise=True)
+            NormalizeIntensity(nonzero=True, channel_wise=True)
         ])
         # Transformaciones espaciales (imagen + etiqueta)
         self.spatial_transforms = Compose([
