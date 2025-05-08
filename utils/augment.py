@@ -19,7 +19,7 @@ from monai.transforms import (
     RandBiasField,
     RandSpatialCropd,
     RandGaussianNoise,
-    RandGaussianBlur,
+    RandGaussianSmooth,
     RandAdjustContrast,
 )
 import torch
@@ -64,7 +64,7 @@ class DataAugmenter(nn.Module):
         # Transformaciones de intensidad (imagen)
         self.intensity_transforms = Compose([
             RandGaussianNoise(prob=0.3, std=(0, 0.15)),
-            RandGaussianBlur(
+            RandGaussianSmooth(
                 prob=0.3,
                 sigma_x=(0.5, 1.5), sigma_y=(0.5, 1.5), sigma_z=(0.5, 1.5)
             ),
