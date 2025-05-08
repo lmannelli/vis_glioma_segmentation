@@ -308,7 +308,7 @@ def main(cfg: DictConfig):
         shuffle=False,
         num_workers=0,
         pin_memory=False,
-        persistent_workers=True,
+        persistent_workers=False,
         prefetch_factor=None,
     )
 
