@@ -242,15 +242,15 @@ def main(cfg: DictConfig):
         # crop fijo al tamaño de la inferencia
         RandSpatialCropd(
             keys=["image","label"],
-            roi_size=(128,128,128),
+            roi_size=[224, 224, 144],
             random_size=False
         ),
         # por si el spacing/orientación no deja EXACTAMENTE 128³
-        SpatialPadd(
-            keys=["image","label"],
-            spatial_size=[128,128,128],
-            mode='constant'
-        ),
+        # SpatialPadd(
+        #     keys=["image","label"],
+        #     spatial_size=[128,128,128],
+        #     mode='constant'
+        # ),
             # Normalización de intensidad y augmentation
         NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
         RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
@@ -311,21 +311,7 @@ def main(cfg: DictConfig):
         persistent_workers=True,
         prefetch_factor=2,
     )
-    debug_loader = DataLoader(
-        val_ds,
-        batch_size=1,
-        num_workers=0,
-        pin_memory=False,
-        persistent_workers=False
-    )
 
-    for i, batch in enumerate(debug_loader):
-        try:
-            # si quieres ver dimensiones:
-            print(f"{i:03d} → image {batch['image'].shape}, label {batch['label'].shape}")
-        except Exception as e:
-            print(f"Error en sample {i}: {val_ds.patient_ids[i]} → {e}")
-            break
     # Model
     arch = cfg.model.architecture
     if arch == "segres_net":
@@ -387,7 +373,7 @@ def main(cfg: DictConfig):
                               get_not_nans=True)
     inferer = partial(
         sliding_window_inference,
-        roi_size=(128,128,128),
+        roi_size=[224, 224, 160],
         sw_batch_size=cfg.training.sw_batch_size,
         predictor=model,
         overlap=cfg.model.infer_overlap,
