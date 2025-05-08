@@ -22,7 +22,6 @@ from monai.transforms import (
     RandGaussianSmooth,
     RandAdjustContrast,
 )
-import torch
 import torch.nn as nn
 class DataAugmenter(nn.Module):
     def __init__(self, roi_size=(128, 128, 128)):
@@ -84,8 +83,10 @@ class DataAugmenter(nn.Module):
         for b in range(batch_size):
             img = images[b]
             lbl = labels[b]
+            
             # 1) Normalize intensidades
             img = self.basic_transforms(img)
+
             # 2) Crop aleatorio a roi_size
             dz = Z - self.roi_size[0]
             dy = Y - self.roi_size[1]
@@ -95,16 +96,23 @@ class DataAugmenter(nn.Module):
             x0 = torch.randint(0, dx + 1, ()).item() if dx > 0 else 0
             img = img[:, z0 : z0 + self.roi_size[0], y0 : y0 + self.roi_size[1], x0 : x0 + self.roi_size[2]]
             lbl = lbl[:, z0 : z0 + self.roi_size[0], y0 : y0 + self.roi_size[1], x0 : x0 + self.roi_size[2]]
+
             # 3) Spatial (misma semilla para ambas)
             seed = torch.randint(0, 1_000_000, (1,)).item()
+
             torch.manual_seed(seed)
             img = self.spatial_transforms(img)
+
             torch.manual_seed(seed)
-            lbl = self.spatial_transforms(lbl, mode='nearest')
+            for transform in self.spatial_transforms.transforms:
+                lbl = transform(lbl, mode='nearest')
+
             # 4) Bias field (solo imagen)
             img = self.bias_field(img)
+
             # 5) Intensidad (solo imagen)
             img = self.intensity_transforms(img)
+
             # Guardar
             out_imgs[b] = img
             out_lbls[b] = lbl
