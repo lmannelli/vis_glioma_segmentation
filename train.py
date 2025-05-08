@@ -324,7 +324,9 @@ def main(cfg: DictConfig):
         raise ValueError(f"Unknown arch {arch}")
     
     model = model.to(device)
-
+    model = model.to(memory_format=torch.channels_last)
+    model = torch.compile(model)
+    
     if cfg.training.pretrained:
         pretrained_path = cfg.training.pretrained_path  # agrégalo en tu config
         model = load_pretrained_model(
