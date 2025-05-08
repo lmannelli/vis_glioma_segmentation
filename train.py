@@ -18,6 +18,7 @@ from omegaconf import OmegaConf, DictConfig
 from monai.data import decollate_batch, DataLoader
 import torch
 import torch.nn as nn
+import torch.multiprocessing as mp
 from torch.backends import cudnn
 from torch.utils.data import Subset
 from torch.amp import autocast, GradScaler
@@ -133,7 +134,7 @@ def train_epoch(model, loader, optimizer, loss_fn, scaler, device):
         meter.update(loss_value, n=imgs.size(0))
 
         # Logging por batch
-        # logger.info(f"{step}/{total_steps}, train_loss: {loss_value:.4f}, step time: {step_time:.4f}")
+        logger.info(f"{step}/{total_steps}, train_loss: {loss_value:.4f}, step time: {step_time:.4f}")
         wandb.log({"train/loss_batch": loss_value})
     return meter.avg
 @torch.no_grad()
@@ -299,7 +300,7 @@ def main(cfg: DictConfig):
         shuffle=True,
         num_workers=cfg.training.num_workers,
         pin_memory=True,
-        persistent_workers=True,
+        persistent_workers=False,
         prefetch_factor=2,
     )
     val_loader = DataLoader(
@@ -307,9 +308,9 @@ def main(cfg: DictConfig):
         batch_size=cfg.training.batch_size,
         shuffle=False,
         num_workers=0,
-        pin_memory=False,
+        pin_memory=True,
         persistent_workers=False,
-        prefetch_factor=None,
+        prefetch_factor=2,
     )
 
     # Model
@@ -490,4 +491,5 @@ def main(cfg: DictConfig):
     wandb.finish()
 
 if __name__ == "__main__":
+    mp.set_start_method('spawn', force=True)
     main()
