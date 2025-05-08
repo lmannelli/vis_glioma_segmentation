@@ -109,33 +109,55 @@ def save_data(training_loss, et, wt, tc, mean_dice, epochs, cfg):
 
 # ————————————————————————————————————————————————————————————————
 def train_epoch(model, loader, optimizer, loss_fn, scaler, device):
-    """
-    Entrena una época y loguea por batch:
-     - imprime:  step/total_steps, train_loss, step time
-     - wandb.log({"train/loss_batch": loss})
-    """
     model.train()
     meter = AverageMeter()
     total_steps = len(loader)
     for step, batch in enumerate(loader, start=1):
         t0 = time.time()
-        imgs = batch["image"].to(device, non_blocking=True)
-        lbls = batch["label"].to(device, non_blocking=True)
+
+        # 1) Tiempo de DataLoader + transform (antes de .to())
+        t_load_start = time.time()
+        imgs_raw = batch["image"]
+        lbls_raw = batch["label"]
+        t_load = time.time() - t_load_start
+
+        # 2) Tiempo de copia a GPU
+        t_to_start = time.time()
+        imgs = imgs_raw.to(device, non_blocking=True)
+        lbls = lbls_raw.to(device, non_blocking=True)
+        t_to = time.time() - t_to_start
+
         optimizer.zero_grad()
+
+        # 3) Tiempo de forward + cálculo de loss
+        t_fwd_start = time.time()
         with autocast(device_type="cuda"):
             preds = model(imgs)
             loss = loss_fn(preds, lbls)
+        t_fwd = time.time() - t_fwd_start
+
+        # 4) Tiempo de backward + step
+        t_bwd_start = time.time()
         scaler.scale(loss).backward()
         scaler.step(optimizer)
         scaler.update()
+        t_bwd = time.time() - t_bwd_start
 
+        # 5) Logging y acumulado
         step_time = time.time() - t0
         loss_value = loss.item()
         meter.update(loss_value, n=imgs.size(0))
 
-        # Logging por batch
-        logger.info(f"{step}/{total_steps}, train_loss: {loss_value:.4f}, step time: {step_time:.4f}")
-        wandb.log({"train/loss_batch": loss_value})
+        logger.info(
+            f"[Step {step}/{total_steps}] "
+            f"load: {t_load:.3f}s  to_gpu: {t_to:.3f}s  "
+            f"forward: {t_fwd:.3f}s  backward: {t_bwd:.3f}s  "
+            f"total: {step_time:.3f}s  loss: {loss_value:.4f}"
+        )
+        wandb.log({"train/loss_batch": loss_value}, commit=False)
+
+    # commit all wandb logs of this epoch
+    wandb.log({}, commit=True)
     return meter.avg
 @torch.no_grad()
 def validate(model, loader, inferer, post_sigmoid, post_pred, acc_fn, device):
@@ -153,55 +175,6 @@ def validate(model, loader, inferer, post_sigmoid, post_pred, acc_fn, device):
     metrics, _ = acc_fn.aggregate()
     return metrics.cpu().numpy()  # array [TC, WT, ET]
 
-def extract_tumor_labels_from_seg_masks(image):
-    """
-    Transforma una máscara de segmentación con etiquetas:
-      - 1: Necrosis (NCR)
-      - 2: Edema (ED)
-      - 3: Enhancing Tumor (ET)
-      - 4: Non-Enhancing Tumor (NET)
-    en un tensor o array con tres canales binarios:
-      0: ET (Enhancing Tumor)
-      1: TC (Tumor Core = NCR ∪ NET ∪ ET)
-      2: WT (Whole Tumor = TC ∪ ED)
-    """
-    # Definición de IDs según tu convención
-    ncr_label = 1  # Necrosis
-    ed_label  = 2  # Edema
-    et_label  = 3  # Enhancing Tumor
-    net_label = 4  # Non-Enhancing Tumor
-
-    # Soportar tanto torch.Tensor como np.ndarray
-    is_tensor = isinstance(image, torch.Tensor)
-    if is_tensor:
-        img = image.cpu().numpy()
-    else:
-        img = image.copy()
-
-    # Si viene con canal extra de 1
-    if img.ndim == 4 and img.shape[0] == 1:
-        img = img.squeeze(0)
-
-    # Crear máscaras binarias de cada componente
-    et  = (img == et_label)
-    ncr = (img == ncr_label)
-    net = (img == net_label)
-    ed  = (img == ed_label)
-
-    # Tumor Core = NCR ∪ NET ∪ ET
-    tc = np.logical_or(ncr, net)
-    tc = np.logical_or(tc, et)
-
-    # Whole Tumor = TC ∪ ED
-    wt = np.logical_or(tc, ed)
-
-    # Stack en orden [ET, TC, WT]
-    seg_masks = np.stack([et, tc, wt]).astype(np.uint8)
-
-    if is_tensor:
-        return torch.from_numpy(seg_masks)
-    else:
-        return seg_masks
 # ————————————————————————————————————————————————————————————————
 @hydra.main(config_path="conf", config_name="configs", version_base=None)
 def main(cfg: DictConfig):
