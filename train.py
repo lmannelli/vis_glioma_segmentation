@@ -306,7 +306,7 @@ def main(cfg: DictConfig):
         val_ds,
         batch_size=cfg.training.batch_size,
         shuffle=False,
-        num_workers=cfg.training.num_workers,
+        num_workers=0,
         pin_memory=False,
         persistent_workers=True,
         prefetch_factor=2,
