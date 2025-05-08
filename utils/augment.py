@@ -20,6 +20,7 @@ from monai.transforms import (
     RandGaussianNoised,
     RandGaussianSmoothd,
     RandAdjustContrastd,
+    EnsureChannelFirstd
 )
 import torch.nn as nn
 
@@ -29,6 +30,7 @@ class DataAugmenter(nn.Module):
         self.roi_size = roi_size  # (Z, Y, X)
 
         self.transforms = Compose([
+            EnsureChannelFirstd(keys=["image", "label"]),  
             NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
             RandAffined(keys=["image", "label"], prob=0.5,
                        rotate_range=(0.26, 0.26, 0.26),
