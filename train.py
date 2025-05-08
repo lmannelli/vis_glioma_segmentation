@@ -260,10 +260,6 @@ def main(cfg: DictConfig):
         RandGaussianSharpend(keys="image", prob=0.3),
         RandGaussianNoised(keys="image", prob=0.8),
         RandGibbsNoised(keys="image", prob=0.5),
-
-        # Finalmente tipado en CPU; el .to(device) lo harás en el loop
-        EnsureTyped(keys="image", dtype=np.float32),
-        EnsureTyped(keys="label", dtype=np.int8),
     ])
 
     v_transform = Compose([
@@ -278,8 +274,6 @@ def main(cfg: DictConfig):
             mode=("bilinear", "nearest")
         ),
         NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
-        EnsureTyped(keys="image", dtype=np.float32),
-        EnsureTyped(keys="label", dtype=np.int8),
     ])
     train_ds = CustomDataset(
         root_dir=cfg.dataset.dataset_folder,
@@ -317,7 +311,21 @@ def main(cfg: DictConfig):
         persistent_workers=True,
         prefetch_factor=2,
     )
+    debug_loader = DataLoader(
+        val_ds,
+        batch_size=1,
+        num_workers=0,
+        pin_memory=False,
+        persistent_workers=False
+    )
 
+    for i, batch in enumerate(debug_loader):
+        try:
+            # si quieres ver dimensiones:
+            print(f"{i:03d} → image {batch['image'].shape}, label {batch['label'].shape}")
+        except Exception as e:
+            print(f"Error en sample {i}: {val_ds.patient_ids[i]} → {e}")
+            break
     # Model
     arch = cfg.model.architecture
     if arch == "segres_net":
