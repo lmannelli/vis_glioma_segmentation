@@ -50,7 +50,7 @@ class DataAugmenter(nn.Module):
             RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
             RandBiasFieldd(keys="image", prob=0.3, degree=3, coeff_range=(0.3, 0.7)),
             # Aquí usamos el transform correcto para rangos:
-            RandGaussianNoised(keys="image", prob=0.3, mean=0.0, std=(0.0, 0.15)),
+            RandGaussianNoised(keys="image", prob=0.3, mean=0.0, std=0.1),
             RandGaussianSmoothd(keys="image", prob=0.3,
                                 sigma_x=(0.5, 1.5),
                                 sigma_y=(0.5, 1.5),
