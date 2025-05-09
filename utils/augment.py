@@ -7,7 +7,7 @@ from random import random, uniform
 from monai.transforms.spatial.array import Zoom
 from monai.transforms.intensity.array import RandGaussianNoise, GaussianSharpen, AdjustContrast
 from monai.transforms import RandAffined, RandAxisFlipd
-from monai.transforms import RandElastic, RandBiasField, RandRotate, RandCoarseDropout
+from monai.transforms import Rand3DElastic, RandBiasField, RandRotate, RandCoarseDropout
 
 # credit CKD-TransBTS
 class DataAugmenter(nn.Module):
@@ -63,8 +63,8 @@ class DataAugmenter(nn.Module):
                 if self.phase >= 2:
                     # Elastic deformation (Monai)
                     if random() < 0.30:
-                        img = RandElastic(spatial_size=img.shape[1:], magnitude_range=(20,50), prob=1.0)(img)
-                        lbl = RandElastic(spatial_size=lbl.shape[1:], magnitude_range=(20,50), prob=1.0)(lbl)
+                        img = Rand3DElastic(spatial_size=img.shape[1:], magnitude_range=(20,50), prob=1.0)(img)
+                        lbl = Rand3DElastic(spatial_size=lbl.shape[1:], magnitude_range=(20,50), prob=1.0)(lbl)
                     # Bias field
                     if random() < 0.20:
                         img = RandBiasField(prob=1.0, coef_range=(0.1, 0.5))(img)
