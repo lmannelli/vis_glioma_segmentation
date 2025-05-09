@@ -7,86 +7,80 @@ from random import random, uniform
 from monai.transforms.spatial.array import Zoom
 from monai.transforms.intensity.array import RandGaussianNoise, GaussianSharpen, AdjustContrast
 from monai.transforms import RandAffined, RandAxisFlipd
+from monai.transforms import RandElastic, RandBiasField, RandRotate, RandCoarseDropout
 
 # credit CKD-TransBTS
-from monai.transforms import (
-    Compose,
-    NormalizeIntensityd,
-    RandAffined,
-    RandZoomd,
-    RandFlipd,
-    Rand3DElasticd,
-    RandBiasFieldd,
-    RandGaussianNoised,
-    RandGaussianSmoothd,
-    RandAdjustContrastd,
-    EnsureChannelFirstd
-)
-import torch.nn as nn
-
 class DataAugmenter(nn.Module):
-    def __init__(self, roi_size=(128, 128, 128)):
-        super().__init__()
-        self.roi_size = roi_size
+    """
+    Data augmentation en fases de 50 épocas:
+      - fase 0 (épocas 0–49): flips, zoom ligero, ruido y contraste suave
+      - fase 1 (épocas 50–99): + blur más intenso, ruido aumentado
+      - fase 2 (épocas 100–149): + deformación elástica y bias field
+    """
+    def __init__(self, phase_epochs: int = 50):
+        super(DataAugmenter, self).__init__()
+        self.phase_epochs = phase_epochs
+        self.phase = 0
 
-        self.transforms = Compose([
-            NormalizeIntensityd(keys="image", nonzero=True, channel_wise=True),
-            RandAffined(keys=["image", "label"], prob=0.5,
-                        rotate_range=(0.26,)*3,
-                        translate_range=(0.1,)*3,
-                        scale_range=(0.1,)*3,
-                        padding_mode='border',
-                        mode=('bilinear', 'nearest')),
-            Rand3DElasticd(keys=["image", "label"], prob=0.3,
-                           sigma_range=(10, 20), magnitude_range=(0.2, 0.4),
-                           padding_mode='border',
-                           mode=('bilinear', 'nearest')),
-            RandZoomd(keys=["image", "label"], prob=0.3,
-                      min_zoom=0.7, max_zoom=1.4,
-                      padding_mode='constant', keep_size=True,
-                      mode=('bilinear', 'nearest')),
-            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=0),
-            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=1),
-            RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=2),
-            RandBiasFieldd(keys="image", prob=0.3, degree=3, coeff_range=(0.3, 0.7)),
-            # Aquí usamos el transform correcto para rangos:
-            RandGaussianNoised(keys="image", prob=0.3, mean=0.0, std=0.1),
-            RandGaussianSmoothd(keys="image", prob=0.3,
-                                sigma_x=(0.5, 1.5),
-                                sigma_y=(0.5, 1.5),
-                                sigma_z=(0.5, 1.5)),
-            RandAdjustContrastd(keys="image", prob=0.3, gamma=(0.7, 1.5)),
-        ])
-    def forward(self, images, labels):
-        """
-        images: Tensor[B, C_img, Z, Y, X]
-        labels: Tensor[B, C_lbl, Z, Y, X]
-        returns: aug_images, aug_labels with shape [B, C_*, roi_z, roi_y, roi_x]
-        """
-        batch_size, _, Z, Y, X = images.shape
-        out_imgs = torch.zeros((batch_size, images.shape[1], *self.roi_size), device=images.device)
-        out_lbls = torch.zeros((batch_size, labels.shape[1], *self.roi_size), device=labels.device)
+    def update_phase(self, epoch: int):
+        # Calcula fase actual según la época
+        self.phase = min(epoch // self.phase_epochs, 4)
 
-        for b in range(batch_size):
-            img = images[b]
-            lbl = labels[b]
+    def forward(self, images: torch.Tensor, labels: torch.Tensor):
+        """Recibe batch [B, 1, H, W, D] y aplica augment según la fase."""
+        with torch.no_grad():
+            for b in range(images.shape[0]):
+                img = images[b].squeeze(0)
+                lbl = labels[b].squeeze(0)
 
-            # Crop aleatorio
-            dz, dy, dx = Z - self.roi_size[0], Y - self.roi_size[1], X - self.roi_size[2]
-            z0 = torch.randint(0, dz + 1, ()).item() if dz > 0 else 0
-            y0 = torch.randint(0, dy + 1, ()).item() if dy > 0 else 0
-            x0 = torch.randint(0, dx + 1, ()).item() if dx > 0 else 0
-            img = img[:, z0 : z0 + self.roi_size[0], y0 : y0 + self.roi_size[1], x0 : x0 + self.roi_size[2]]
-            lbl = lbl[:, z0 : z0 + self.roi_size[0], y0 : y0 + self.roi_size[1], x0 : x0 + self.roi_size[2]]
+                # --- Fase 0: flips y zoom ligero ---
+                # Zoom ligero (p=0.15)
+                if random() < 0.15:
+                    z = uniform(0.7, 1.0)
+                    img = Zoom(zoom=z, mode="trilinear", padding_mode="constant")(img)
+                    lbl = Zoom(zoom=z, mode="nearest", padding_mode="constant")(lbl)
+                # Flips en 3 ejes (p=0.5 cada uno)
+                if random() < 0.5:
+                    img = torch.flip(img, dims=(1,)); lbl = torch.flip(lbl, dims=(1,))
+                if random() < 0.5:
+                    img = torch.flip(img, dims=(2,)); lbl = torch.flip(lbl, dims=(2,))
+                if random() < 0.5:
+                    img = torch.flip(img, dims=(3,)); lbl = torch.flip(lbl, dims=(3,))
+                # Ruido y contraste suave
+                if random() < 0.10:
+                    img = RandGaussianNoise(prob=1.0, mean=0.0, std=uniform(0.0, 0.2))(img)
+                if random() < 0.10:
+                    img = AdjustContrast(gamma=uniform(0.8, 1.2))(img)
 
-            # Transform
-            data = {"image": img, "label": lbl}
-            data = self.transforms(data)
+                # --- Fase 1: blur más intenso y ruido aumentado ---
+                if self.phase >= 1:
+                    if random() < 0.20:
+                        img = RandGaussianNoise(prob=1.0, mean=0.0, std=uniform(0.2, 0.4))(img)
+                    if random() < 0.20:
+                        img = GaussianSharpen(sigma1=uniform(0.5,1.5), sigma2=uniform(0.5,1.5))(img)
 
-            out_imgs[b] = data["image"]
-            out_lbls[b] = data["label"]
+                # --- Fase 2: deformación elástica y bias field ---
+                if self.phase >= 2:
+                    # Elastic deformation (Monai)
+                    if random() < 0.30:
+                        img = RandElastic(spatial_size=img.shape[1:], magnitude_range=(20,50), prob=1.0)(img)
+                        lbl = RandElastic(spatial_size=lbl.shape[1:], magnitude_range=(20,50), prob=1.0)(lbl)
+                    # Bias field
+                    if random() < 0.20:
+                        img = RandBiasField(prob=1.0, coef_range=(0.1, 0.5))(img)
 
-        return out_imgs, out_lbls
+                # Fase 3: rotaciones 3D y coarse dropout
+                if self.phase >= 3:
+                    if random() < 0.30:
+                        img = RandRotate(range_x=10, range_y=10, range_z=10, prob=1.0)(img)
+                        lbl = RandRotate(range_x=10, range_y=10, range_z=10, prob=1.0)(lbl)
+                    if random() < 0.20:
+                        img = RandCoarseDropout(holes=8, spatial_size=(16,16,16), prob=1.0)(img)
+                # --- Fase 4: usa todo el pipeline (no cambios extra, está cubierto) ---
+                images[b] = img.unsqueeze(0)
+                labels[b] = lbl.unsqueeze(0)
+
+        return images, labels
 class AttnUnetAugmentation(nn.Module):
     def __init__(self):
       super(AttnUnetAugmentation, self).__init__()

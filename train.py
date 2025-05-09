@@ -118,6 +118,7 @@ def train_epoch(model, loader, optimizer, loss_fn, scaler, augmenter, device):
         # Logging por batch
         logger.info(f"{step}/{total_steps}, train_loss: {loss_value:.4f}, step time: {step_time:.4f}")
         wandb.log({"train/loss_batch": loss_value})
+
     return meter.avg
 @torch.no_grad()
 def validate(model, loader, inferer, post_sigmoid, post_pred, acc_fn, device):
@@ -167,7 +168,7 @@ def main(cfg: DictConfig):
         val_ds,
         batch_size=cfg.training.batch_size,
         shuffle=False,
-        num_workers=cfg.training.num_workers,
+        num_workers=1,
         pin_memory=True,
         persistent_workers=True,
         prefetch_factor=2,
@@ -256,7 +257,7 @@ def main(cfg: DictConfig):
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=cfg.training.max_epochs)
     scaler = GradScaler()
-    augmenter = DataAugmenter(roi_size=(128,128,128)).to(device)
+    augmenter = DataAugmenter(phase_epochs=cfg.phase_epochs).to(device)
 
     # Históricos
     training_losses, dices_tc, dices_wt, dices_et, dices_mean, epochs_list = [], [], [], [], [], []
@@ -278,6 +279,7 @@ def main(cfg: DictConfig):
             logger.warning(f"No se encontró checkpoint en {ckpt_path}; comenzando desde 0")
 
     for epoch in range(start_epoch, cfg.training.max_epochs):
+        augmenter.update_phase(epoch)
         # Epoch training
         t0 = time.time()
         train_loss = train_epoch(model, train_loader, optimizer, loss_fn, scaler, augmenter, device)
