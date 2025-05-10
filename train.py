@@ -41,7 +41,7 @@ except ModuleNotFoundError:
     
 from functools import partial
 from utils.augment import DataAugmenter
-from utils.schedulers import SegResNetScheduler, PolyDecayScheduler
+from utils.schedulers import SegResNetScheduler, PolyDecayScheduler, WarmupCosineScheduler
 
 # Configure logger
 import logging
@@ -248,7 +248,13 @@ def main(cfg: DictConfig):
         weight_decay=cfg.training.weight_decay
     )
     if arch == "segres_net":
-        scheduler = SegResNetScheduler(optimizer, cfg.training.max_epochs, cfg.training.learning_rate)
+        # scheduler = SegResNetScheduler(optimizer, cfg.training.max_epochs, cfg.training.learning_rate) #Silenciado para testear
+        scheduler = WarmupCosineScheduler(
+        optimizer,
+        total_epochs=cfg.training.max_epochs,
+        initial_lr=cfg.training.learning_rate,
+        warmup_epochs=10,             # o el valor que prefieras
+    )
     elif arch == "nn_former":
         scheduler = PolyDecayScheduler(optimizer,
                                        total_epochs=cfg.training.max_epochs,
@@ -308,7 +314,7 @@ def main(cfg: DictConfig):
         dices_et.append(et)
         dices_mean.append(mean_d)
         epochs_list.append(epoch)
-
+        current_lr = optimizer.param_groups[0]['lr']
         # Logging
         logger.info(
             f"Epoch {epoch+1}/{cfg.training.max_epochs} — "
@@ -324,6 +330,7 @@ def main(cfg: DictConfig):
             "val/dice_wt": wt,
             "val/dice_et": et,
             "epoch": epoch + 1,
+            "lr": current_lr,
         })
         save_checkpoint(
             model=model,
