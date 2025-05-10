@@ -251,9 +251,11 @@ def main(cfg: DictConfig):
         # scheduler = SegResNetScheduler(optimizer, cfg.training.max_epochs, cfg.training.learning_rate) #Silenciado para testear
         scheduler = WarmupCosineScheduler(
         optimizer,
-        total_epochs=cfg.training.max_epochs,
-        initial_lr=cfg.training.learning_rate,
-        warmup_epochs=10,             
+        warmup_steps=0,                 # cero warm-up
+        t_total=cfg.training.max_epochs, # número total de epochs
+        end_lr=0.0,                     # LR al final del entrenamiento
+        cycles=0.5,                     # 0.5 ciclos = un semiperiodo cosenoidal
+        last_epoch=-1,
     )
     elif arch == "nn_former":
         scheduler = PolyDecayScheduler(optimizer,
@@ -317,7 +319,7 @@ def main(cfg: DictConfig):
         current_lr = optimizer.param_groups[0]['lr']
         # Logging
         logger.info(
-            f"Epoch {epoch+1}/{cfg.training.max_epochs} — "
+            f"Epoch {epoch}/{cfg.training.max_epochs} — "
             f"TrainLoss: {train_loss:.4f} ({t_train:.1f}s) — "
             f"ValDice: {mean_d:.4f} TC:{tc:.4f} WT:{wt:.4f} ET:{et:.4f} ({t_val:.1f}s) — "
             f"GPUmem: {torch.cuda.max_memory_allocated()/1e9:.2f}G — "
@@ -329,14 +331,14 @@ def main(cfg: DictConfig):
             "val/dice_tc": tc,
             "val/dice_wt": wt,
             "val/dice_et": et,
-            "epoch": epoch + 1,
+            "epoch": epoch,
             "lr": current_lr,
         })
         save_checkpoint(
             model=model,
             optimizer=optimizer,
             scheduler=scheduler,
-            epoch=epoch + 1,
+            epoch=epoch,
             best_acc=best_mean,
             filename="checkpoint.pth",
             save_dir=ckpt_dir
