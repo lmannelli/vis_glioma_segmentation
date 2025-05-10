@@ -253,7 +253,7 @@ def main(cfg: DictConfig):
         optimizer,
         total_epochs=cfg.training.max_epochs,
         initial_lr=cfg.training.learning_rate,
-        warmup_epochs=10,             # o el valor que prefieras
+        warmup_epochs=10,             
     )
     elif arch == "nn_former":
         scheduler = PolyDecayScheduler(optimizer,

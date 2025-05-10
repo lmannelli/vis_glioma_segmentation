@@ -33,7 +33,7 @@ class DataAugmenter(nn.Module):
             for b in range(images.shape[0]):
                 img = images[b].squeeze(0)
                 lbl = labels[b].squeeze(0)
-                img = self.normalizer
+                img = self.normalizer(img)
                 # --- Fase 0: flips y zoom ligero ---
                 # Zoom ligero (p=0.15)
                 if random() < 0.15:
