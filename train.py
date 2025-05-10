@@ -28,6 +28,7 @@ from monai.inferers import sliding_window_inference
 from monai.transforms import (
     AsDiscrete,
     Activations,
+    NormalizeIntensity
 )
 from monai.networks.nets import SwinUNETR, SegResNet, VNet, AttentionUnet, UNETR
 from networks.models.ResUNetpp.model import ResUnetPlusPlus
@@ -126,6 +127,7 @@ def validate(model, loader, inferer, post_sigmoid, post_pred, acc_fn, device):
     all_preds, all_lbls = [], []
     for batch in loader:
         imgs = batch["image"].to(device, non_blocking=True)
+        imgs = NormalizeIntensity(nonzero=True, channel_wise=True)(imgs)
         lbls = decollate_batch(batch["label"].to(device))
         logits = inferer(imgs)
         all_preds.extend(decollate_batch(logits))
