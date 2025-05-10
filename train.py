@@ -249,14 +249,7 @@ def main(cfg: DictConfig):
     )
     if arch == "segres_net":
         # scheduler = SegResNetScheduler(optimizer, cfg.training.max_epochs, cfg.training.learning_rate) #Silenciado para testear
-        scheduler = WarmupCosineScheduler(
-        optimizer,
-        warmup_steps=0,                 # cero warm-up
-        t_total=cfg.training.max_epochs, # número total de epochs
-        end_lr=0.0,                     # LR al final del entrenamiento
-        cycles=0.5,                     # 0.5 ciclos = un semiperiodo cosenoidal
-        last_epoch=-1,
-    )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.training.max_epochs)
     elif arch == "nn_former":
         scheduler = PolyDecayScheduler(optimizer,
                                        total_epochs=cfg.training.max_epochs,
