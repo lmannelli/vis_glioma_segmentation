@@ -8,7 +8,7 @@ val_every: 1
 weight_decay: 0.00001
 warmup_epochs: 8
 solver_name: Adam
-loss_type: dice
+loss_type: dice+focal
 pretrained: False
 pretrained_path: None #"ruta/a/mi_pretrained.pth"
 resume: False
