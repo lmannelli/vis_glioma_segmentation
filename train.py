@@ -280,7 +280,8 @@ def main(cfg: DictConfig):
                 cfg.training.max_epochs = cfg.training.new_max_epochs
         else:
             logger.warning(f"No se encontró checkpoint en {ckpt_path}; comenzando desde 0")
-
+    print(start_epoch)
+    print(cfg.training.max_epochs)
     for epoch in range(start_epoch, cfg.training.max_epochs):
         augmenter.update_phase(epoch)
         # Epoch training
