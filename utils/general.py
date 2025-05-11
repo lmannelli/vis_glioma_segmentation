@@ -72,8 +72,10 @@ def resume_training(model, optimizer, scheduler, ckpt_path, device, scaler=None)
         torch.set_rng_state(rstate['torch'])
         torch.cuda.set_rng_state_all(rstate['cuda'])
 
-    start_epoch = ckpt['epoch']
-    best_acc    = ckpt['best_acc']
+    # start_epoch = ckpt['epoch']
+    # best_acc    = ckpt['best_acc']
+    start_epoch = int(ckpt['epoch'])
+    best_acc    = float(ckpt['best_acc'])
     return start_epoch, best_acc
 
 
