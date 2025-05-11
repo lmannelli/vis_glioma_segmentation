@@ -23,18 +23,19 @@ from torch.amp import autocast, GradScaler
 from monai.metrics import DiceMetric, HausdorffDistanceMetric
 from monai.utils.enums import MetricReduction
 from networks.models.ResUNetpp.model import ResUnetPlusPlus
-from monai.losses import DiceLoss, DiceCELoss
+from monai.losses import DiceLoss, DiceCELoss, FocalLoss
 from monai.inferers import sliding_window_inference
 from monai.transforms import (
     AsDiscrete,
     Activations,
     NormalizeIntensity
 )
-from monai.networks.nets import SwinUNETR, SegResNet, VNet, AttentionUnet, UNETR
+from monai.networks.nets import SwinUNETR, SegResNet, VNet, AttentionUnet, UNETR, SegResNetDS
 from networks.models.ResUNetpp.model import ResUnetPlusPlus
 from networks.models.UNet.model import UNet3D
 from networks.models.UX_Net.network_backbone import UXNET
 from networks.models.nnformer.nnFormer_tumor import nnFormer
+from torch.optim.lr_scheduler import SequentialLR, LinearLR, CosineAnnealingLR
 try:
     from thesis.models.SegUXNet.model import SegUXNet
 except ModuleNotFoundError:
@@ -42,7 +43,7 @@ except ModuleNotFoundError:
     
 from functools import partial
 from utils.augment import DataAugmenter
-from utils.schedulers import SegResNetScheduler, PolyDecayScheduler, WarmupCosineScheduler
+from utils.schedulers import SegResNetScheduler, PolyDecayScheduler
 
 # Configure logger
 import logging
@@ -87,6 +88,14 @@ def save_data(training_loss, et, wt, tc, mean_dice, epochs, cfg):
     os.makedirs(path, exist_ok=True)
     df.to_csv(os.path.join(path, "training_data.csv"), index=False)
     return df
+
+def deep_supervised_loss(pred_list, target):
+    # pred_list[0] = salida fina, luego pred_list[1], pred_list[2], …
+    weights = [1 / (2 ** i) for i in range(len(pred_list))]
+    total = 0
+    for w, p in zip(weights, pred_list):
+        total += w * (dice_loss(p, target) + focal_loss(p, target))
+    return total
 
 # ————————————————————————————————————————————————————————————————
 def train_epoch(model, loader, optimizer, loss_fn, scaler, augmenter, device):
@@ -184,6 +193,12 @@ def main(cfg: DictConfig):
                           dropout_prob=0.2,
                           blocks_down=(1,2,2,4),
                           blocks_up=(1,1,1))
+    elif arch == "segres_net_v2":
+        model = SegResNet(spatial_dims=3, init_filters=32,
+                          in_channels=4, out_channels=3,
+                          dropout_prob=0.2,
+                          blocks_down=(1,2,2,4),
+                          blocks_up=(1,1,1))    
     elif arch == "unet3d":
         model = UNet3D(in_channels=4, num_classes=3)
     elif arch == "v_net":
@@ -226,6 +241,18 @@ def main(cfg: DictConfig):
     # Loss
     if cfg.training.loss_type == "dice":
         loss_fn = DiceLoss(to_onehot_y=False, sigmoid=True)
+    elif cfg.training.loss_type == "dice+focal":
+        global dice_loss, focal_loss
+        dice_loss  = DiceLoss(to_onehot_y=False, sigmoid=True, reduction="mean")
+        focal_loss = FocalLoss(gamma=2.0, reduction="mean")
+        def _loss(preds, lbls):
+            if isinstance(preds, (list, tuple)):
+                return deep_supervised_loss(preds, lbls)
+            else:
+                l = dice_loss(preds, lbls)
+                f = focal_loss(preds, lbls)
+                return l + f
+        loss_fn = _loss
     else:
         loss_fn = DiceCELoss(to_onehot_y=False, sigmoid=True)
 
@@ -250,8 +277,23 @@ def main(cfg: DictConfig):
         weight_decay=cfg.training.weight_decay
     )
     if arch == "segres_net":
-        # scheduler = SegResNetScheduler(optimizer, cfg.training.max_epochs, cfg.training.learning_rate) #Silenciado para testear
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=cfg.training.max_epochs)
+        scheduler = SegResNetScheduler(optimizer, cfg.training.max_epochs, cfg.training.learning_rate)
+    elif arch == "segres_net_v2":
+        sched_warmup = LinearLR(
+            optimizer,
+            start_factor=1e-7/1e-4,
+            total_iters=cfg.training.warmup_epochs,
+        )
+        sched_cosine = CosineAnnealingLR(
+            optimizer,
+            T_max=cfg.training.max_epochs - cfg.training.warmup_epochs,
+            eta_min=1e-6,
+        )
+        scheduler = SequentialLR(
+            optimizer,
+            schedulers=[sched_warmup, sched_cosine],
+            milestones=[cfg.training.warmup_epochs],
+        )
     elif arch == "nn_former":
         scheduler = PolyDecayScheduler(optimizer,
                                        total_epochs=cfg.training.max_epochs,
@@ -276,10 +318,11 @@ def main(cfg: DictConfig):
                 model, optimizer, scheduler, ckpt_path, device
             )
             # si quieres aumentar el total de epochs al reanudar:
-            # if cfg.training.new_max_epochs is not None:
-            #     cfg.training.max_epochs = cfg.training.new_max_epochs
+            if cfg.training.new_max_epochs is not None:
+                cfg.training.max_epochs = cfg.training.new_max_epochs
         else:
             logger.warning(f"No se encontró checkpoint en {ckpt_path}; comenzando desde 0")
+
     for epoch in range(start_epoch, cfg.training.max_epochs):
         # Epoch training
         t0 = time.time()
@@ -309,10 +352,10 @@ def main(cfg: DictConfig):
         dices_et.append(et)
         dices_mean.append(mean_d)
         epochs_list.append(epoch)
-        current_lr = optimizer.param_groups[0]['lr']
+
         # Logging
         logger.info(
-            f"Epoch {epoch}/{cfg.training.max_epochs} — "
+            f"Epoch {epoch+1}/{cfg.training.max_epochs} — "
             f"TrainLoss: {train_loss:.4f} ({t_train:.1f}s) — "
             f"ValDice: {mean_d:.4f} TC:{tc:.4f} WT:{wt:.4f} ET:{et:.4f} ({t_val:.1f}s) — "
             f"GPUmem: {torch.cuda.max_memory_allocated()/1e9:.2f}G — "
@@ -325,7 +368,6 @@ def main(cfg: DictConfig):
             "val/dice_wt": wt,
             "val/dice_et": et,
             "epoch": epoch,
-            "lr": current_lr,
         })
         save_checkpoint(
             model=model,
