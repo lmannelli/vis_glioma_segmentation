@@ -12,34 +12,33 @@ from monai.transforms import Rand3DElasticd, RandBiasField, RandRotated, RandCoa
 # credit CKD-TransBTS
 class DataAugmenter(nn.Module):
     """
-    Data augmentation en fases de 50 épocas:
-      - fase 0 (épocas 0–49): flips, zoom ligero, ruido y contraste suave
-      - fase 1 (épocas 50–99): + blur más intenso, ruido aumentado
-      - fase 2 (épocas 100–149): + deformación elástica y bias field
+    Data augmentation unificado (sin fases):
+      - flips
+      - zoom ligero
+      - ruido gaussiano suave
+      - ajuste de contraste suave
+      - rotaciones 3D leves
+      - bias field sutil
     """
-    def __init__(self, phase_epochs: int = 50):
+    def __init__(self):
         super(DataAugmenter, self).__init__()
-        self.phase_epochs = phase_epochs
-        self.phase = 0
         self.normalizer = NormalizeIntensity(nonzero=True, channel_wise=True)
 
-    def update_phase(self, epoch: int):
-        # Calcula fase actual según la época
-        self.phase = min(epoch // self.phase_epochs, 3)
-
     def forward(self, images: torch.Tensor, labels: torch.Tensor):
-        """Recibe batch [B, 1, H, W, D] y aplica augment según la fase."""
+        """Recibe batch [B, 1, H, W, D] y aplica augmentaciones."""
         with torch.no_grad():
             for b in range(images.shape[0]):
                 img = images[b].squeeze(0)
                 lbl = labels[b].squeeze(0)
+
                 img = self.normalizer(img)
-                # --- Fase 0: flips y zoom ligero ---
+
                 # Zoom ligero (p=0.15)
                 if random() < 0.15:
-                    z = uniform(0.7, 1.0)
+                    z = uniform(0.8, 1.1)
                     img = Zoom(zoom=z, mode="trilinear", padding_mode="constant")(img)
                     lbl = Zoom(zoom=z, mode="nearest", padding_mode="constant")(lbl)
+
                 # Flips en 3 ejes (p=0.5 cada uno)
                 if random() < 0.5:
                     img = torch.flip(img, dims=(1,)); lbl = torch.flip(lbl, dims=(1,))
@@ -47,56 +46,33 @@ class DataAugmenter(nn.Module):
                     img = torch.flip(img, dims=(2,)); lbl = torch.flip(lbl, dims=(2,))
                 if random() < 0.5:
                     img = torch.flip(img, dims=(3,)); lbl = torch.flip(lbl, dims=(3,))
-                # Ruido y contraste suave
-                if random() < 0.10:
+
+                # Ruido gaussiano suave (p=0.1)
+                if random() < 0.1:
                     img = RandGaussianNoise(prob=1.0, mean=0.0, std=uniform(0.0, 0.2))(img)
-                if random() < 0.10:
+
+                # Contraste suave (p=0.1)
+                if random() < 0.1:
                     img = AdjustContrast(gamma=uniform(0.8, 1.2))(img)
 
-                # # --- Fase 1: blur más intenso y ruido aumentado ---
-                # if self.phase >= 1:
-                #     if random() < 0.20:
-                #         img = RandGaussianNoise(prob=1.0, mean=0.0, std=uniform(0.2, 0.4))(img)
-                #     if random() < 0.20:
-                #         img = GaussianSharpen(sigma1=uniform(0.5,1.5), sigma2=uniform(0.5,1.5))(img)
+                # Bias field muy sutil (p=0.1)
+                if random() < 0.1:
+                    img = RandBiasField(prob=1.0, coeff_range=(0.02, 0.05))(img)
 
-                # --- Fase 2: deformación elástica y bias field ---
-                if self.phase >= 1:
-                    # Elastic deformation (Monai)
-                    deform = Rand3DElasticd(
-                        keys=["img","lbl"],                   # aplicar a ambos
-                        sigma_range=(2.0, 3.5),               # rango de sigma
-                        magnitude_range=(2.0, 5.0),           # desplazamientos en voxels
-                        prob=1.0,                             # ya hicimos la probabilidad externa
-                        mode=("bilinear","nearest"),          # trilinear para img y nearest para lbl
-                        padding_mode="zeros"                  # background=0 fuera de volúmen
+                # Rotaciones 3D leves (p=0.2)
+                if random() < 0.2:
+                    rot = RandRotated(
+                        keys=["img", "lbl"],
+                        range_x=(-5, 5),
+                        range_y=(-5, 5),
+                        range_z=(-5, 5),
+                        prob=1.0,
+                        mode=("bilinear", "nearest"),
+                        padding_mode="zeros"
                     )
-                    if random() < 0.30:
-                        data = {"img": img, "lbl": lbl}
-                        out = deform(data)
-                        img, lbl = out["img"], out["lbl"]
-                    # Bias field
-                    if random() < 0.20:
-                        img = RandBiasField(prob=1.0, coeff_range=(0.1, 0.5))(img)
+                    out = rot({"img": img, "lbl": lbl})
+                    img, lbl = out["img"], out["lbl"]
 
-                # Fase 3: rotaciones 3D y coarse dropout
-                if self.phase >= 2:
-                    if random() < 0.30:
-                        rot = RandRotated(                           # o RandRotateD(...)
-                        keys=["img", "lbl"],                     # ambos reciben la misma rotación
-                        range_x=(-10,10),                        # rotación aleatoria ±10° en X
-                        range_y=(-10,10),                        # rotación aleatoria ±10° en Y
-                        range_z=(-10,10),                        # rotación aleatoria ±10° en Z
-                        prob=1.0,                                # ya controlas pexterna ≈0.30
-                        mode=("bilinear", "nearest"),            # bilinear para imagen, nearest para mask
-                        padding_mode="zeros",                    # fondo=0 en bordes
-                    )
-                        data = {"img": img, "lbl": lbl}
-                        out = rot(data)                             # devuelve dict con llaves transformadas
-                        img, lbl = out["img"], out["lbl"]
-                    # if random() < 0.20:
-                    #     img = RandCoarseDropout(holes=8, spatial_size=(16,16,16), prob=1.0)(img)
-                # --- Fase 4: usa todo el pipeline (no cambios extra, está cubierto) ---
                 images[b] = img.unsqueeze(0)
                 labels[b] = lbl.unsqueeze(0)
 

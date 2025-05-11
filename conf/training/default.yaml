@@ -11,7 +11,7 @@ solver_name: Adam
 loss_type: dice
 pretrained: False
 pretrained_path: None #"ruta/a/mi_pretrained.pth"
-resume: True
+resume: False
 seed: 123
 colab: False
 irl: True
@@ -20,5 +20,5 @@ my_pc: False
 Optimize: True
 new_max_epochs: None
 project_name: "Visionary Neuro GLI"
-exp_name: "SegResNet_Run_cosineLR_v1.2"
+exp_name: "SegResNet_Run_cosineLR_v1.2.1"
 wand_api_key: 981af7fdfb60c59545a06fcba96db2a57079cdf9
