@@ -68,7 +68,7 @@ class DataAugmenter(nn.Module):
                         lbl = Rand3DElastic(spatial_size=lbl.shape[1:], magnitude_range=(20,50), prob=1.0)(lbl)
                     # Bias field
                     if random() < 0.20:
-                        img = RandBiasField(prob=1.0, coef_range=(0.1, 0.5))(img)
+                        img = RandBiasField(prob=1.0, coeff_range=(0.1, 0.5))(img)
 
                 # Fase 3: rotaciones 3D y coarse dropout
                 if self.phase >= 2:
