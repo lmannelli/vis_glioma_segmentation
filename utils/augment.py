@@ -7,7 +7,7 @@ from random import random, uniform
 from monai.transforms.spatial.array import Zoom
 from monai.transforms.intensity.array import RandGaussianNoise, GaussianSharpen, AdjustContrast
 from monai.transforms import RandAffined, RandAxisFlipd
-from monai.transforms import Rand3DElastic, RandBiasField, RandRotate, RandCoarseDropout,NormalizeIntensity
+from monai.transforms import Rand3DElasticd, RandBiasField, RandRotated, RandCoarseDropout,NormalizeIntensity
 
 # credit CKD-TransBTS
 class DataAugmenter(nn.Module):
@@ -63,9 +63,18 @@ class DataAugmenter(nn.Module):
                 # --- Fase 2: deformación elástica y bias field ---
                 if self.phase >= 1:
                     # Elastic deformation (Monai)
+                    deform = Rand3DElasticd(
+                        keys=["img","lbl"],                   # aplicar a ambos
+                        sigma_range=(2.0, 3.5),               # rango de sigma
+                        magnitude_range=(2.0, 5.0),           # desplazamientos en voxels
+                        prob=1.0,                             # ya hicimos la probabilidad externa
+                        mode=("bilinear","nearest"),          # trilinear para img y nearest para lbl
+                        padding_mode="zeros"                  # background=0 fuera de volúmen
+                    )
                     if random() < 0.30:
-                        img = Rand3DElastic(spatial_size=img.shape[1:], magnitude_range=(20,50), prob=1.0)(img)
-                        lbl = Rand3DElastic(spatial_size=lbl.shape[1:], magnitude_range=(20,50), prob=1.0)(lbl)
+                        data = {"img": img, "lbl": lbl}
+                        out = deform(data)
+                        img, lbl = out["img"], out["lbl"]
                     # Bias field
                     if random() < 0.20:
                         img = RandBiasField(prob=1.0, coeff_range=(0.1, 0.5))(img)
@@ -73,10 +82,20 @@ class DataAugmenter(nn.Module):
                 # Fase 3: rotaciones 3D y coarse dropout
                 if self.phase >= 2:
                     if random() < 0.30:
-                        img = RandRotate(range_x=10, range_y=10, range_z=10, prob=1.0)(img)
-                        lbl = RandRotate(range_x=10, range_y=10, range_z=10, prob=1.0)(lbl)
-                    if random() < 0.20:
-                        img = RandCoarseDropout(holes=8, spatial_size=(16,16,16), prob=1.0)(img)
+                        rot = RandRotated(                           # o RandRotateD(...)
+                        keys=["img", "lbl"],                     # ambos reciben la misma rotación
+                        range_x=(-10,10),                        # rotación aleatoria ±10° en X
+                        range_y=(-10,10),                        # rotación aleatoria ±10° en Y
+                        range_z=(-10,10),                        # rotación aleatoria ±10° en Z
+                        prob=1.0,                                # ya controlas pexterna ≈0.30
+                        mode=("bilinear", "nearest"),            # bilinear para imagen, nearest para mask
+                        padding_mode="zeros",                    # fondo=0 en bordes
+                    )
+                        data = {"img": img, "lbl": lbl}
+                        out = rot(data)                             # devuelve dict con llaves transformadas
+                        img, lbl = out["img"], out["lbl"]
+                    # if random() < 0.20:
+                    #     img = RandCoarseDropout(holes=8, spatial_size=(16,16,16), prob=1.0)(img)
                 # --- Fase 4: usa todo el pipeline (no cambios extra, está cubierto) ---
                 images[b] = img.unsqueeze(0)
                 labels[b] = lbl.unsqueeze(0)
