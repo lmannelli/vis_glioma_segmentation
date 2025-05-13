@@ -317,9 +317,9 @@ def main(cfg: DictConfig):
             start_epoch, best_mean = resume_training(
                 model, optimizer, scheduler, ckpt_path, device
             )
-            # si quieres aumentar el total de epochs al reanudar:
-            if cfg.training.new_max_epochs is not None:
-                cfg.training.max_epochs = cfg.training.new_max_epochs
+            # # si quieres aumentar el total de epochs al reanudar:
+            # if cfg.training.new_max_epochs is not None:
+            #     cfg.training.max_epochs = cfg.training.new_max_epochs
         else:
             logger.warning(f"No se encontró checkpoint en {ckpt_path}; comenzando desde 0")
 
