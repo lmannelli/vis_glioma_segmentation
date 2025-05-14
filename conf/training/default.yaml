@@ -9,7 +9,7 @@ weight_decay: 0.00001
 warmup_epochs: 8
 solver_name: Adam
 loss_type: dice+focal
-pretrained: False
+pretrained: True
 pretrained_path: "/home/psalmon/Visionary_Glioma/vis_glioma_segmentation/BTCV/pretrained_models/brats18_model.ts"
 resume: True
 seed: 123

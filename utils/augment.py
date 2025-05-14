@@ -49,7 +49,7 @@ class DataAugmenter(nn.Module):
 
                 # Ruido gaussiano suave (p=0.1)
                 if random() < 0.1:
-                    img = RandShiftIntensity(nonzero = True, channel_wise = True)(img)
+                    img = RandShiftIntensity(prob=1.0, offsets = 0.1)(img)
 
                 # Contraste suave (p=0.1)
                 if random() < 0.1:
