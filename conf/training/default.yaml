@@ -2,7 +2,7 @@ batch_size: 1
 num_workers: 4
 infer_overlap: 0.5
 learning_rate: 0.0001
-max_epochs: 300
+max_epochs: 200
 sw_batch_size: 2
 val_every: 1
 weight_decay: 0.00001
@@ -10,7 +10,7 @@ warmup_epochs: 8
 solver_name: Adam
 loss_type: dice+focal
 pretrained: False
-pretrained_path: None #"ruta/a/mi_pretrained.pth"
+pretrained_path: "/home/psalmon/Visionary_Glioma/vis_glioma_segmentation/BTCV/pretrained_models/brats18_model.ts"
 resume: True
 seed: 123
 colab: False
@@ -20,5 +20,5 @@ my_pc: False
 Optimize: True
 new_max_epochs: None
 project_name: "Visionary Neuro GLI"
-exp_name: "SegResNet_Run_diceloss_v1.1.1"
+exp_name: "SegResNet_Run_diceloss_DataAug_v1.1.1"
 wand_api_key: 981af7fdfb60c59545a06fcba96db2a57079cdf9

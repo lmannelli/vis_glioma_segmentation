@@ -7,7 +7,7 @@ from random import random, uniform
 from monai.transforms.spatial.array import Zoom
 from monai.transforms.intensity.array import RandGaussianNoise, GaussianSharpen, AdjustContrast
 from monai.transforms import RandAffined, RandAxisFlipd
-from monai.transforms import Rand3DElasticd, RandBiasField, RandRotated, RandCoarseDropout,NormalizeIntensity
+from monai.transforms import Rand3DElasticd,RandShiftIntensity, RandBiasField, RandRotated, RandCoarseDropout,NormalizeIntensity
 
 # credit CKD-TransBTS
 class DataAugmenter(nn.Module):
@@ -49,7 +49,7 @@ class DataAugmenter(nn.Module):
 
                 # Ruido gaussiano suave (p=0.1)
                 if random() < 0.1:
-                    img = RandGaussianNoise(prob=1.0, mean=0.0, std=uniform(0.0, 0.2))(img)
+                    img = RandShiftIntensity(prob=1.0, mean=0.0, std=uniform(0.0, 0.2))(img)
 
                 # Contraste suave (p=0.1)
                 if random() < 0.1:
@@ -63,9 +63,9 @@ class DataAugmenter(nn.Module):
                 if random() < 0.2:
                     rot = RandRotated(
                         keys=["img", "lbl"],
-                        range_x=(-5, 5),
-                        range_y=(-5, 5),
-                        range_z=(-5, 5),
+                        range_x=(-2, 2),
+                        range_y=(-2, 2),
+                        range_z=(-2, 2),
                         prob=1.0,
                         mode=("bilinear", "nearest"),
                         padding_mode="zeros"

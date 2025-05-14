@@ -164,8 +164,8 @@ def main(cfg: DictConfig):
     )
 
     # Data
-    train_ds = get_datasets(cfg.dataset.dataset_folder, "train", target_size=(128,128,128))
-    val_ds   = get_datasets(cfg.dataset.dataset_folder, "val",   target_size=(128,128,128))
+    train_ds = get_datasets(cfg.dataset.dataset_folder, "train", target_size=(224,224,144))
+    val_ds   = get_datasets(cfg.dataset.dataset_folder, "val",   target_size=(224,224,144))
     train_loader = DataLoader(
         train_ds,
         batch_size=cfg.training.batch_size,
@@ -188,13 +188,13 @@ def main(cfg: DictConfig):
     # Model
     arch = cfg.model.architecture
     if arch == "segres_net":
-        model = SegResNet(spatial_dims=3, init_filters=32,
+        model = SegResNet(spatial_dims=3, init_filters=16,
                           in_channels=4, out_channels=3,
                           dropout_prob=0.2,
                           blocks_down=(1,2,2,4),
                           blocks_up=(1,1,1))
     elif arch == "segres_net_v2":
-        model = SegResNet(spatial_dims=3, init_filters=32,
+        model = SegResNet(spatial_dims=3, init_filters=16,
                           in_channels=4, out_channels=3,
                           dropout_prob=0.2,
                           blocks_down=(1,2,2,4),
@@ -264,7 +264,7 @@ def main(cfg: DictConfig):
                               get_not_nans=True)
     inferer = partial(
         sliding_window_inference,
-        roi_size=(128,128,128),
+        roi_size=(240,240,160),
         sw_batch_size=cfg.training.sw_batch_size,
         predictor=model,
         overlap=cfg.model.infer_overlap,

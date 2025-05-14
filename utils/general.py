@@ -84,30 +84,30 @@ def load_pretrained_model(model: nn.Module,
                           device: torch.device = torch.device("cpu"),
                           strict: bool = True) -> nn.Module:
     """
-    Carga pesos pre-entrenados en un modelo, opcionalmente sin hacer match exacto de
-    nombres de parámetros (strict=False).
-
-    Parameters
-    ----------
-    model: nn.Module
-    state_path: str            Path al .pth o .pt que contiene {"state_dict": ...}
-    device: torch.device       Dispositivo de mapeo (cpu o cuda)
-    strict: bool               Si True, exige coincidencia exacta de keys
-
-    Returns
-    -------
-    model: nn.Module           Modelo con pesos cargados
+        Carga pesos pre-entrenados, soportando tanto checkpoints estándar como TorchScript.
     """
-    checkpoint = torch.load(state_path, map_location=device)
-    state_dict = checkpoint.get("state_dict", checkpoint)
-    # En algunos casos tu checkpoint podría tener prefijos distintos (p.ej. "module.")
-    # Aquí puedes limpiar prefijos si fuera necesario:
-    new_state = {}
-    for k, v in state_dict.items():
-        name = k.replace("module.", "")  # quita 'module.' si existe
-        new_state[name] = v
-    model.load_state_dict(new_state, strict=strict)
-    print(f"=> Pretrained weights loaded from {state_path} (strict={strict})")
+    try:
+        # Intenta cargar como checkpoint estándar (state_dict)
+        checkpoint = torch.load(state_path, map_location=device)
+        if isinstance(checkpoint, dict) and "state_dict" in checkpoint:
+            state_dict = checkpoint["state_dict"]
+        else:
+            state_dict = checkpoint
+
+        # Limpieza de keys (opcional, para modelos entrenados con DataParallel)
+        new_state = {}
+        for k, v in state_dict.items():
+            name = k.replace("module.", "")  # Elimina prefijos de DataParallel
+            new_state[name] = v
+
+        model.load_state_dict(new_state, strict=strict)
+        print(f"=> Checkpoint cargado desde {state_path} (strict={strict})")
+
+    except RuntimeError:
+        # Si falla, asumimos que es TorchScript
+        model = torch.jit.load(state_path, map_location=device)
+        print(f"=> Modelo TorchScript cargado desde {state_path}")
+
     return model
 
 
