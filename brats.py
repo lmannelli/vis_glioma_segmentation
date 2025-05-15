@@ -27,15 +27,15 @@ class BraTS(Dataset):
         # Define modality suffixes for each version
         if version in ["brats2023", "brats2024"]:
             modality_suffixes = {
-                "t1": "-t1n",
                 "t1ce": "-t1c",
+                "t1": "-t1n",
                 "t2": "-t2w",
                 "flair": "-t2f"
             }
         elif version in ["brats2019", "brats2020"]:
             modality_suffixes = {
-                "t1": "_t1",
                 "t1ce": "_t1ce",
+                "t1": "_t1",
                 "t2": "_t2",
                 "flair": "_flair"
             }
@@ -112,7 +112,7 @@ class BraTS(Dataset):
 
             # Whole Tumor = unión de Tumor Core y Edema
             wt  = torch.logical_or(tc, ed) 
-            patient_label = torch.stack([et, tc, wt])
+            patient_label = torch.stack([tc, wt, et])
 
         # Apply padding/cropping
         if self.mode in ["train", "val", "test"]:
